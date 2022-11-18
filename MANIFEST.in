@@ -1,0 +1,2 @@
+include jddesk/templates/*
+include jddesk/static/*

@@ -1,0 +1,36 @@
+
+[project]
+name = "jddesk"
+description = "Code powering Jaedolph's desk related channel points rewards"
+version = "0.1.0"
+authors = [
+    { name = "Jaedolph - Lord of Games" }
+]
+dependencies = [
+    "flask",
+    "requests",
+    "flask_socketio",
+    "gattlib",
+]
+
+[project.scripts]
+jddesk = "jddesk.__main__:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+
+[tool.docformatter]
+wrap-summaries = 100
+wrap-descriptions = 100
+
+[tool.pylint]
+load-plugins = ["pylint.extensions.docparams", "pylint.extensions.docstyle"]
+max-args = 10
+
+[[tool.mypy.overrides]]
+module = "gattlib"
+ignore_missing_imports = true
