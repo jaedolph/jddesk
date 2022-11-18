@@ -45,7 +45,7 @@ You can get your `BROADCASTER_ID` from a site like this: https://www.streamwease
 
 The `CLIENT_ID` you can get by creating an "application" here: https://dev.twitch.tv/console/apps/create
 
-Once you have the `CLIENT_ID`, you can get the `AUTH_TOKEN` from here (it will be included in the URL you get redirected to): https://id.twitch.tv/oauth2/authorize?client_id=<PASTE CLIENT ID HERE>&redirect_uri=http://localhost&response_type=token&scope=channel:read:redemptions%20channel:manage:redemptions%20openid
+Once you have the `CLIENT_ID`, you can get the `AUTH_TOKEN` from here (it will be included in the URL you get redirected to): https://id.twitch.tv/oauth2/authorize?client_id=abcdefghijklmnopqrst1234567890&redirect_uri=http://localhost&response_type=token&scope=channel:read:redemptions%20channel:manage:redemptions%20openid
 
 # Running the program
 
