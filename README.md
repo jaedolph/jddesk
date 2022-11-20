@@ -6,6 +6,34 @@ The code may be useful for reference by streamers attempting to do a similar thi
 
 The code is very specific to my setup so would probably require a lot of hacking to get working with another type of desk. I have an [OMNIDESK PRO 2020](https://theomnidesk.com.au/collections/omnidesk-pro-2020) with the optional [bluetooth controller](https://theomnidesk.com.au/products/bluetooth-controller).
 
+# Architecture
+The application consists of two parts:
+* The display server
+* The desk controller
+
+## Display server
+The display server is a [Flask](https://flask.palletsprojects.com/) based web application for displaying the desk height. It can be used as a browser source in OBS. The server uses the socketio protocol to receive and transmit real time updates of the desk height.
+
+## Desk controller
+The desk controller continually polls the Twitch API for channel point reward redemptions. If there are redemptions in the queue it will send commands to the desk's bluetooth controller.
+
+The desk controller will also listen for "notify" events from the bluetooth controller which show the current height of the desk. These notify events are sent every time the desk moves. Each event is relayed to the display server so the current height of the desk can be displayed in OBS in real time.
+
+## System diagram
+```mermaid
+graph LR;
+    obs(OBS Browser Source)
+    display(Display Server)
+    controller(Desk Controller)
+    desk(Desk Bluetooth Module)
+
+    obs-- http -->display
+    display-- socketio -->obs
+    controller-- socketio -->display
+    controller-- Bluetooth GATT commands -->desk
+    desk-- Bluetooth GATT notifications -->controller
+```
+
 # Installation
 
 This package requires several C/C++ libraries in order for the `gattlib` dependency to install properly.
@@ -17,9 +45,14 @@ Installing deps on Fedora:
 sudo dnf install gcc-c++ python3-devel boost-python3-devel glib2-devel bluez-libs-devel
 ```
 
-Install the packages:
+## Install using pip
 ```bash
 python3 -m pip install . --user
+```
+
+## Build docker image
+```
+docker build -t jddesk:latest .
 ```
 
 # Config
@@ -51,12 +84,27 @@ Once you have the `CLIENT_ID`, you can get the `AUTH_TOKEN` from here (it will b
 
 Ensure bluetooth is enabled.
 
-Run the program:
+Run the display server:
 ```
-jddesk
- * Serving Flask app 'jddesk.web'
- * Debug mode: off
+jddesk-display
+```
+
+Run the desk controller:
+```
+jddesk-controller
 ```
 
 The web server will run on port 5000, you can set up a browser source in OBS to display the desk
 height in real time using http://yourhostname:5000.
+
+# Running with Docker/Podman
+```
+# ensure selinux perms are correct on your config file
+chcon -t container_file_t ~/.jddesk.ini
+
+# run the display server
+docker run --name jddesk-display -p 5000:5000 quay.io/jaedolph/jddesk:latest jddesk-display
+
+# run the controller
+docker run --name jddesk-controller -v /var/run/dbus/:/var/run/dbus/  -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini quay.io/jaedolph/jddesk:latest
+```

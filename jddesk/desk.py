@@ -2,8 +2,8 @@
 
 import logging
 from time import sleep
-from typing import Callable
 
+import socketio
 from gattlib import BTBaseException, GATTRequester  # pylint: disable=no-name-in-module
 from requests import RequestException
 
@@ -26,10 +26,17 @@ STATE_SITTING = "SITTING"
 STATE_STOPPED = "STOPPED"
 
 # these are hardcoded heights for my setup (in cm)
-DESK_HEIGHT_STANDING = 123
-DESK_HEIGHT_SITTING = 75
+DESK_HEIGHT_STANDING = 123.0
+DESK_HEIGHT_SITTING = 74.5
+
+# time in seconds to wait between each poll of the twitch api
+POLL_INTERVAL = 1
 
 LOG = logging.getLogger("jddesk")
+
+
+class FatalException(Exception):
+    """Custom exception when the controller fails and can't recover."""
 
 
 class DeskController(GATTRequester):  # type: ignore
@@ -46,7 +53,7 @@ class DeskController(GATTRequester):  # type: ignore
     :param controller_mac: MAC address of the desk's bluetooth controller
     :param desk_up_reward_id: UUID of the channel points reward for moving the desk up
     :param desk_down_reward_id: UUID of the channel points reward for moving the desk down
-    :param callback: callback function to run when a desk height update notification is received
+    :param display_server_url: url of the display server to send height updates to
     """
 
     def __init__(
@@ -55,16 +62,17 @@ class DeskController(GATTRequester):  # type: ignore
         controller_mac: str,
         desk_up_reward_id: str,
         desk_down_reward_id: str,
-        callback: Callable[[float], None],
+        display_server_url: str,
     ) -> None:
 
         self.twitch_api = twitch_api
         self.controller_mac = controller_mac
         self.desk_up_reward_id = desk_up_reward_id
         self.desk_down_reward_id = desk_down_reward_id
-        self.callback = callback
-        self.height = 0.0
-        self.state = STATE_STOPPED
+        self.display_server_url = display_server_url
+        self.sio_client = socketio.Client(reconnection=False)
+        self.height = DESK_HEIGHT_SITTING
+        self.state = STATE_SITTING
 
         # initialise the GATTRequester without connecting
         super().__init__(self.controller_mac, False)
@@ -116,8 +124,8 @@ class DeskController(GATTRequester):  # type: ignore
 
             self.height = height_new
             LOG.debug("state=%s", self.state)
-            # Run the callback function to notify the web app of the height change
-            self.callback(self.height)
+
+            self.display_height()
 
     def move_desk_up(self) -> None:
         """Sends commands to the desk to move it to the standing position."""
@@ -138,15 +146,32 @@ class DeskController(GATTRequester):  # type: ignore
     def reconnect(self) -> None:
         """Attempts to reconnect to desk via bluetooth."""
 
-        LOG.info("attempting to reconnect to desk...")
+        LOG.info("attempting to reconnect to desk via bluetooth...")
         try:
             self.disconnect()
-            sleep(2)
+            sleep(1)
             self.connect()
+            sleep(1)
+            # workaround the connect() function not throwing an exception by trying to send a
+            # command
+            self.write_cmd(DESK_HEIGHT_WRITE_HANDLE, DESK_STOP_GATT_CMD)
         except BTBaseException as exp:
-            LOG.exception("could not reconnect: %s", exp)
+            LOG.error("failed to reconnect: %s", exp)
+            return
 
         LOG.info("reconnected successfully")
+
+    def display_height(self) -> None:
+        """Sends a height update to the display server."""
+        try:
+            self.sio_client.emit("height_update", str(self.height))
+        except socketio.client.exceptions.SocketIOError:
+            LOG.error("failed to connect to display server, attempting to reconnect...")
+            try:
+                self.sio_client.connect(self.display_server_url)
+                LOG.info("reconnected to display server")
+            except socketio.client.exceptions.SocketIOError as exp:
+                LOG.error("failed to reconnect: %s", exp)
 
     def handle_desk_up_reward(self, redemption_id: str, user: str) -> None:
         """Handle a singular "Change to Standing Desk" channel points redemption.
@@ -232,3 +257,37 @@ class DeskController(GATTRequester):  # type: ignore
             self.reconnect()
         except Exception as exp:  # pylint: disable=broad-except
             LOG.exception("Unknown error: %s", exp)
+
+    def run(self) -> None:
+        """Run the polling loop."""
+
+        # connect to the desk via bluetooth
+        LOG.info("connecting to desk bluetooth controller at %s...", self.controller_mac)
+        try:
+            self.connect()
+            sleep(2)
+            # test moving the desk to sitting position
+            self.move_desk_down()
+        except BTBaseException as exp:
+            LOG.error("failed to connect to desk via bluetooth: %s", exp)
+            raise FatalException from exp
+
+        # connect to the display server
+        LOG.info("connecting to display server at %s...", self.display_server_url)
+        try:
+            self.sio_client.connect(self.display_server_url)
+        except socketio.client.exceptions.SocketIOError as exp:
+            LOG.error("failed to connect to display server at %s: %s", self.display_server_url, exp)
+            raise FatalException from exp
+
+        # run the polling loop
+        LOG.info("starting twitch api poll loop...")
+        while True:
+            try:
+                LOG.debug("polling twitch api")
+                self.poll()
+                self.display_height()
+                sleep(POLL_INTERVAL)
+            except KeyboardInterrupt:
+                LOG.info("controller shutting down")
+                return
