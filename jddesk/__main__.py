@@ -35,6 +35,7 @@ def main() -> None:
         client_id = config["TWITCH"]["CLIENT_ID"]
         broadcaster_id = config["TWITCH"]["BROADCASTER_ID"]
         controller_mac = config["BLUETOOTH"]["CONTROLLER_MAC"]
+        display_server_url = config["DISPLAY_SERVER"]["URL"]
     except KeyError as exp:
         LOG.error("Missing config item: %s", exp)
         sys.exit(1)
@@ -80,7 +81,7 @@ def main() -> None:
             controller_mac=controller_mac,
             desk_up_reward_id=desk_up_reward_id,
             desk_down_reward_id=desk_down_reward_id,
-            display_server_url="http://localhost:5000",
+            display_server_url=display_server_url,
         )
     except BTBaseException as exp:
         LOG.error("Could not initialise bluetooth connection: %s", exp)
