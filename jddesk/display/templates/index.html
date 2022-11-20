@@ -7,11 +7,11 @@
    <script src="{{url_for('static', filename='socket.io.js')}}"></script>
 
    <script>
-      var socket = io.connect('http://' + document.domain + ':' + location.port + '/jddesk');
-      socket.on('newheight', function(data){
-        datastring = "!desk " + data.height + "cm "
+      var socket = io.connect('http://' + document.domain + ':' + location.port);
+      socket.on('height_display', function(data){
+        datastring = data.height + "cm"
         document.getElementById("height").innerHTML = datastring;
       });
    </script>
-   <body><span id="height"></span></body>
+   <body>!desk <span id="height"></span></body>
 </html>

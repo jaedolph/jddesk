@@ -8,13 +8,16 @@ authors = [
 ]
 dependencies = [
     "flask",
+    "eventlet",
     "requests",
     "flask_socketio",
+    "python-socketio[client]",
     "gattlib",
 ]
 
 [project.scripts]
-jddesk = "jddesk.__main__:main"
+jddesk-controller = "jddesk.__main__:main"
+jddesk-display = "jddesk.display.__main__:main"
 
 [build-system]
 requires = ["setuptools"]
@@ -30,7 +33,12 @@ wrap-descriptions = 100
 [tool.pylint]
 load-plugins = ["pylint.extensions.docparams", "pylint.extensions.docstyle"]
 max-args = 10
+max-attributes = 10
 
 [[tool.mypy.overrides]]
 module = "gattlib"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "socketio"
 ignore_missing_imports = true

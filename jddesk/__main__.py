@@ -3,12 +3,11 @@ import configparser
 import logging
 import pathlib
 import sys
-from threading import Event
 
 from gattlib import BTBaseException  # pylint: disable=no-name-in-module
 from requests import RequestException
 
-from jddesk import desk, twitch, web
+from jddesk import desk, twitch
 
 CONFIG_FILE_NAME = ".jddesk.ini"
 POLL_INTERVAL = 1
@@ -21,32 +20,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# disable spammy logs from the web server
-logging.getLogger("werkzeug").setLevel(logging.CRITICAL)
-
-
-def update_height_display(height: float) -> None:
-    """Updates the desk height display in the web app with the current height.
-
-    :param height: current height of the desk in cm
-    """
-    web.socketio.emit("newheight", {"height": str(height)}, namespace="/jddesk")
-
-
-def run_loop(desk_controller: desk.DeskController, thread_stop_event: Event) -> None:
-    """Run the desk controller thread.
-
-    :param desk_controller: initialised DeskController object
-    :param thread_stop_event: event to use to stop the desk controller thread
-    """
-    # connect to the desk via bluetooth
-    desk_controller.connect()
-
-    # run the polling loop
-    while not thread_stop_event.is_set():
-        desk_controller.poll()
-        web.socketio.sleep(POLL_INTERVAL)
-
 
 def main() -> None:
     """Main entrypoint to the program."""
@@ -57,6 +30,7 @@ def main() -> None:
     config.read(config_file_path)
 
     try:
+        LOG.info("parsing config file...")
         auth_token = config["TWITCH"]["AUTH_TOKEN"]
         client_id = config["TWITCH"]["CLIENT_ID"]
         broadcaster_id = config["TWITCH"]["BROADCASTER_ID"]
@@ -106,18 +80,17 @@ def main() -> None:
             controller_mac=controller_mac,
             desk_up_reward_id=desk_up_reward_id,
             desk_down_reward_id=desk_down_reward_id,
-            callback=update_height_display,
+            display_server_url="http://localhost:5000",
         )
     except BTBaseException as exp:
         LOG.error("Could not initialise bluetooth connection: %s", exp)
         sys.exit(1)
 
-    # start desk controller in background thread
-    thread_stop_event = Event()
-    web.socketio.start_background_task(run_loop, desk_controller, thread_stop_event)
-
-    # start webserver
-    web.socketio.run(web.app, host="0.0.0.0")
+    # start the desk controller
+    try:
+        desk_controller.run()
+    except desk.FatalException:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

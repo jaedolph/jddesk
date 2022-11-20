@@ -1,2 +1,2 @@
-include jddesk/templates/*
-include jddesk/static/*
+include jddesk/display/templates/*
+include jddesk/display/static/*
