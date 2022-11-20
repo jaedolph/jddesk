@@ -106,5 +106,6 @@ chcon -t container_file_t ~/.jddesk.ini
 docker run --name jddesk-display -p 5000:5000 docker.io/jaedolph/jddesk:latest jddesk-display
 
 # run the controller
-docker run --name jddesk-controller -v /var/run/dbus/:/var/run/dbus/  -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini docker.io/jaedolph/jddesk:latest
+docker run --name jddesk-controller --net=host -v /var/run/dbus/:/var/run/dbus/ \
+    -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini docker.io/jaedolph/jddesk:latest
 ```
