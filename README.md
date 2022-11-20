@@ -64,6 +64,9 @@ Example config file:
 [BLUETOOTH]
 CONTROLLER_MAC = 01:02:03:04:05:06
 
+[DISPLAY_SERVER]
+URL = http://localhost:5000
+
 [TWITCH]
 AUTH_TOKEN = 1234567890abcdefghijklmnopqrst
 CLIENT_ID = abcdefghijklmnopqrst1234567890
@@ -71,6 +74,8 @@ BROADCASTER_ID = 12345678
 ```
 
 `CONTROLLER_MAC` is the MAC address of the desk's bluetooth controller.
+
+`URL` is the url of the display server.
 
 (TODO: Automate this process more)
 You can get your `BROADCASTER_ID` from a site like this: https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/
