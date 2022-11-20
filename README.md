@@ -103,8 +103,8 @@ height in real time using http://yourhostname:5000.
 chcon -t container_file_t ~/.jddesk.ini
 
 # run the display server
-docker run --name jddesk-display -p 5000:5000 quay.io/jaedolph/jddesk:latest jddesk-display
+docker run --name jddesk-display -p 5000:5000 docker.io/jaedolph/jddesk:latest jddesk-display
 
 # run the controller
-docker run --name jddesk-controller -v /var/run/dbus/:/var/run/dbus/  -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini quay.io/jaedolph/jddesk:latest
+docker run --name jddesk-controller -v /var/run/dbus/:/var/run/dbus/  -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini docker.io/jaedolph/jddesk:latest
 ```
