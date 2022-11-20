@@ -1,7 +1,11 @@
 """Modules for controlling the desk."""
 
 import logging
+import signal
+import sys
 from time import sleep
+from types import FrameType
+from typing import Optional
 
 import socketio
 from gattlib import BTBaseException, GATTRequester  # pylint: disable=no-name-in-module
@@ -76,6 +80,21 @@ class DeskController(GATTRequester):  # type: ignore
 
         # initialise the GATTRequester without connecting
         super().__init__(self.controller_mac, False)
+
+        # ensure graceful shutdown is handled on SIGINT and SIGTERM signals
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self, signum: int, frame: Optional[FrameType]) -> None:
+        """Gracefully shut down the controller."""
+        del frame
+        LOG.info("received signal %s", signum)
+        LOG.info("disconnecting from display server...")
+        self.sio_client.disconnect()
+        LOG.info("disconnecting bluetooth...")
+        self.disconnect()
+        LOG.info("controller shutting down")
+        sys.exit(0)
 
     @staticmethod
     def get_height_in_cm(data: bytes) -> float:
@@ -283,11 +302,7 @@ class DeskController(GATTRequester):  # type: ignore
         # run the polling loop
         LOG.info("starting twitch api poll loop...")
         while True:
-            try:
-                LOG.debug("polling twitch api")
-                self.poll()
-                self.display_height()
-                sleep(POLL_INTERVAL)
-            except KeyboardInterrupt:
-                LOG.info("controller shutting down")
-                return
+            LOG.debug("polling twitch api")
+            self.poll()
+            self.display_height()
+            sleep(POLL_INTERVAL)
