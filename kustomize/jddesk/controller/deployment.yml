@@ -1,0 +1,40 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jddesk-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jddesk-controller
+  template:
+    metadata:
+      labels:
+        app: jddesk-controller
+    spec:
+      hostNetwork: true
+      volumes:
+        - name: jddesk-config
+          secret:
+            secretName: jddesk-config
+        - name: dbus
+          hostPath:
+            path: /var/run/dbus
+      containers:
+        - name: jddesk-controller
+          image: docker.io/jaedolph/jddesk:latest
+          command:
+            - jddesk-controller
+          imagePullPolicy: Always
+          env:
+            - name: HOME
+              value: /usr/src/app
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /var/run/dbus
+              name: dbus
+            - mountPath: /usr/src/app/.jddesk.ini
+              name: jddesk-config
+              subPath: .jddesk.ini

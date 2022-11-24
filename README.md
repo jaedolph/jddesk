@@ -114,3 +114,16 @@ docker run --name jddesk-display -p 5000:5000 docker.io/jaedolph/jddesk:latest j
 docker run --name jddesk-controller --net=host -v /var/run/dbus/:/var/run/dbus/ \
     -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini docker.io/jaedolph/jddesk:latest
 ```
+
+# Running on Kubernetes
+I have only tested this on k3s running on a Raspberry Pi.
+
+Edit the [kustomize.yml](kustomize/kustomize.yml) file and add the hostname of your desired route for the display server.
+
+Edit the [.jddesk.ini](kustomize/.jddesk.yml) config file. This can be used to generate a secret with your config file.
+
+Apply the resources:
+```
+kubectl kustomize kustomize/ | kubectl apply -f -
+```
+

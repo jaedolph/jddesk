@@ -1,0 +1,6 @@
+---
+resources:
+  - controller/deployment.yml
+  - display/deployment.yml
+  - display/service.yml
+  - display/ingress.yml
