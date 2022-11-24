@@ -1,0 +1,21 @@
+---
+namespace: jddesk
+
+bases:
+  - jddesk
+
+# edit the .jdesk.ini file with your values
+secretGenerator:
+  - name: jddesk-config
+    files:
+      - .jddesk.ini
+
+# change the hostname of your ingress
+patches:
+  - target:
+      kind: Ingress
+      name: jddesk-display
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: <CHANGE ME>

@@ -1,0 +1,23 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jddesk-display
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jddesk-display
+  template:
+    metadata:
+      labels:
+        app: jddesk-display
+    spec:
+      containers:
+        - name: jddesk-display
+          image: docker.io/jaedolph/jddesk:latest
+          command:
+            - jddesk-display
+          ports:
+            - containerPort: 5000
+          imagePullPolicy: Always
