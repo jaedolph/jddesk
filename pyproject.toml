@@ -23,6 +23,9 @@ jddesk-display = "jddesk.display.__main__:main"
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["jddesk", "jddesk.display"]
+
 [tool.black]
 line-length = 100
 
