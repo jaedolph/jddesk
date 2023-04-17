@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - ubuntu-latest
+          - ubuntu-20.04 # same version as the container image
         python-version: [3.9]
 
     steps:
