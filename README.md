@@ -26,10 +26,12 @@ graph LR;
     display(Display Server)
     controller(Desk Controller)
     desk(Desk Bluetooth Module)
+    twitchapi(Twitch API)
 
     obs-- http -->display
     display-- socketio -->obs
     controller-- socketio -->display
+    controller-- https -->twitchapi
     controller-- Bluetooth GATT commands -->desk
     desk-- Bluetooth GATT notifications -->controller
 ```
