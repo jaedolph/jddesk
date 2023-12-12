@@ -38,14 +38,7 @@ graph LR;
 
 # Installation
 
-This package requires several C/C++ libraries in order for the `gattlib` dependency to install properly.
-
-I have only tested running this code on Fedora with Python 3.10.
-
-Installing deps on Fedora:
-```bash
-sudo dnf install gcc-c++ python3-devel boost-python3-devel glib2-devel bluez-libs-devel
-```
+I have only tested running this code on Fedora with Python 3.11.
 
 ## Install using pip
 ```bash
@@ -104,21 +97,37 @@ jddesk-controller
 The web server will run on port 5000, you can set up a browser source in OBS to display the desk
 height in real time using http://yourhostname:5000.
 
-# Running with Docker/Podman
+# Running with Podman
+
+Ensure selinux perms are correct on your config file
 ```
-# ensure selinux perms are correct on your config file
 chcon -t container_file_t ~/.jddesk.ini
+```
 
-# run the display server
-docker run --name jddesk-display -p 5000:5000 docker.io/jaedolph/jddesk:latest jddesk-display
+Run the display server
+```
+podman run \
+    -d \
+    --name jddesk-display \
+    -p 5000:5000 \
+    docker.io/jaedolph/jddesk:latest jddesk-display
+```
 
-# run the controller
-docker run --name jddesk-controller --net=host -v /var/run/dbus/:/var/run/dbus/ \
+Run the controller
+```
+podman run \
+    -d \
+    --name jddesk-controller \
+    --net=host \
+    -v /var/run/dbus/:/var/run/dbus/ \
+    --userns=keep-id \
+    --user=$UID \
+    --privileged \
     -v ~/.jddesk.ini:/usr/src/app/.jddesk.ini docker.io/jaedolph/jddesk:latest
 ```
 
 # Running on Kubernetes
-I have only tested this on k3s running on a Raspberry Pi.
+I have only tested this on k3s running on a Raspberry Pi. May not work with latest version.
 
 Edit the [kustomize.yml](kustomize/kustomize.yml) file and add the hostname of your desired route for the display server.
 
@@ -128,4 +137,3 @@ Apply the resources:
 ```
 kubectl kustomize kustomize/ | kubectl apply -f -
 ```
-

@@ -14,8 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - ubuntu-20.04 # same version as the container image
-        python-version: [3.9]
+          - ubuntu-latest
+        python-version: [3.11]
 
     steps:
     - uses: actions/checkout@v3
@@ -25,17 +25,6 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
       run: |
-        # install build deps
-        sudo apt-get update
-        sudo apt-get install -y \
-          gcc \
-          g++ \
-          pkg-config \
-          libboost-python-dev \
-          libboost-thread-dev \
-          libbluetooth-dev \
-          libglib2.0-dev \
-          python3.9-dev
         python -m pip install --upgrade setuptools pip wheel tox tox-gh-actions
     - name: Test with tox
       run: tox

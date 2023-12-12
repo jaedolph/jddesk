@@ -3,8 +3,10 @@ import configparser
 import logging
 import pathlib
 import sys
+import asyncio
 
-from gattlib import BTBaseException  # pylint: disable=no-name-in-module
+from bleak.exc import BleakError
+
 from requests import RequestException
 
 from jddesk import desk, twitch
@@ -21,8 +23,8 @@ logging.basicConfig(
 )
 
 
-def main() -> None:
-    """Main entrypoint to the program."""
+async def run() -> None:
+    """Initialises and runs the desk controller."""
 
     # read config
     config_file_path = str(pathlib.Path.home() / CONFIG_FILE_NAME)
@@ -83,15 +85,19 @@ def main() -> None:
             desk_down_reward_id=desk_down_reward_id,
             display_server_url=display_server_url,
         )
-    except BTBaseException as exp:
+    except BleakError as exp:
         LOG.error("Could not initialise bluetooth connection: %s", exp)
         sys.exit(1)
-
     # start the desk controller
     try:
-        desk_controller.run()
+        await desk_controller.run()
     except desk.FatalException:
         sys.exit(1)
+
+
+def main() -> None:
+    """Main entrypoint to the program."""
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

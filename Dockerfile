@@ -1,16 +1,9 @@
-FROM python:3.9-slim-bullseye
+FROM python:3.11-slim
 
 WORKDIR /usr/src/app
 
 RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    pkg-config \
-    libboost-python-dev \
-    libboost-thread-dev \
-    libbluetooth-dev \
-    libglib2.0-dev \
-    python3.9-dev \
+    bluez \
     && rm -rf /var/lib/apt/lists/*
 COPY . /usr/src/app
 RUN pip install --no-cache-dir .

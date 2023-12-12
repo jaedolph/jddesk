@@ -2,7 +2,7 @@
 [project]
 name = "jddesk"
 description = "Code powering Jaedolph's desk related channel points rewards"
-version = "0.1.1"
+version = "0.2.1"
 authors = [
     { name = "Jaedolph - Lord of Games" }
 ]
@@ -12,7 +12,7 @@ dependencies = [
     "requests",
     "flask_socketio",
     "python-socketio[client]",
-    "gattlib",
+    "bleak",
 ]
 
 [project.scripts]
@@ -37,10 +37,6 @@ wrap-descriptions = 100
 load-plugins = ["pylint.extensions.docparams", "pylint.extensions.docstyle"]
 max-args = 10
 max-attributes = 10
-
-[[tool.mypy.overrides]]
-module = "gattlib"
-ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "socketio"
