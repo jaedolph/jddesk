@@ -13,6 +13,7 @@ dependencies = [
     "flask_socketio",
     "python-socketio[client]",
     "bleak",
+    "twitchAPI",
 ]
 
 [project.scripts]

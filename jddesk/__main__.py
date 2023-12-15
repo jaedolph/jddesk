@@ -8,6 +8,11 @@ import asyncio
 from bleak.exc import BleakError
 
 from requests import RequestException
+from twitchAPI.twitch import Twitch
+from twitchAPI.pubsub import PubSub
+from twitchAPI.oauth import UserAuthenticator
+from twitchAPI.type import AuthScope
+from twitchAPI.helper import first
 
 from jddesk import desk, twitch
 
@@ -35,7 +40,8 @@ async def run() -> None:
         LOG.info("parsing config file...")
         auth_token = config["TWITCH"]["AUTH_TOKEN"]
         client_id = config["TWITCH"]["CLIENT_ID"]
-        broadcaster_id = config["TWITCH"]["BROADCASTER_ID"]
+        client_secret = config["TWITCH"]["CLIENT_SECRET"]
+        #broadcaster_id = config["TWITCH"]["BROADCASTER_ID"]
         controller_mac = config["BLUETOOTH"]["CONTROLLER_MAC"]
         display_server_url = config["DISPLAY_SERVER"]["URL"]
     except KeyError as exp:
@@ -44,50 +50,68 @@ async def run() -> None:
 
     # create TwitchAPI object from config
     try:
-        twitch_api = twitch.TwitchAPI(
-            auth_token=auth_token,
-            client_id=client_id,
-            broadcaster_id=broadcaster_id,
-        )
-        rewards = twitch_api.get_rewards()
-    except RequestException as exp:
+        twitch = await Twitch(client_id, client_secret)
+        await twitch.authenticate_app([])
+        target_scope: list = [AuthScope.CHANNEL_READ_REDEMPTIONS]
+        auth = UserAuthenticator(twitch, target_scope, force_verify=False)
+        print("auth")
+        token, refresh_token = await auth.authenticate()
+        print("auth2")
+        await twitch.set_user_authentication(token, target_scope, refresh_token)
+        print("auth2")
+        broadcaster = await first(twitch.get_users(logins=["jaedolph"]))
+        broadcaster_id = broadcaster.id
+        print(broadcaster_id)
+        #["data"][0]["id"]
+        # twitch_api = twitch.TwitchAPI(
+        #     auth_token=auth_token,
+        #     client_id=client_id,
+        #     broadcaster_id=broadcaster_id,
+        # )
+        #rewards = twitch_api.get_rewards()
+    except Exception as exp:
         LOG.error("Could not initialise twitch connection: %s", exp)
         sys.exit(1)
 
-    # convert reward names to ids
-    try:
-        desk_up_reward_id = None
-        desk_down_reward_id = None
-        for reward in rewards:
-            title = reward["title"]
-            if title == DESK_UP_REWARD_NAME:
-                desk_up_reward_id = reward["id"]
-                continue
-            if title == DESK_DOWN_REWARD_NAME:
-                desk_down_reward_id = reward["id"]
-                continue
+    # set up channel points listeners
+    # try:
 
-        if not desk_up_reward_id:
-            raise KeyError(f"no reward id matching '{DESK_UP_REWARD_NAME}'")
-        if not desk_down_reward_id:
-            raise KeyError(f"no reward id matching '{DESK_DOWN_REWARD_NAME}'")
 
-    except KeyError as exp:
-        LOG.error("Could not get reward ids: %s", exp)
-        sys.exit(1)
+
+
+        # desk_up_reward_id = None
+        # desk_down_reward_id = None
+        # for reward in rewards:
+        #     title = reward["title"]
+        #     if title == DESK_UP_REWARD_NAME:
+        #         desk_up_reward_id = reward["id"]
+        #         continue
+        #     if title == DESK_DOWN_REWARD_NAME:
+        #         desk_down_reward_id = reward["id"]
+        #         continue
+
+        # if not desk_up_reward_id:
+        #     raise KeyError(f"no reward id matching '{DESK_UP_REWARD_NAME}'")
+        # if not desk_down_reward_id:
+        #     raise KeyError(f"no reward id matching '{DESK_DOWN_REWARD_NAME}'")
+
+    # except KeyError as exp:
+    #     LOG.error("Could not get reward ids: %s", exp)
+    #     sys.exit(1)
 
     # create DeskController object from config
     try:
         desk_controller = desk.DeskController(
-            twitch_api=twitch_api,
+            twitch=twitch,
+            broadcaster_id=broadcaster_id,
             controller_mac=controller_mac,
-            desk_up_reward_id=desk_up_reward_id,
-            desk_down_reward_id=desk_down_reward_id,
             display_server_url=display_server_url,
         )
     except BleakError as exp:
         LOG.error("Could not initialise bluetooth connection: %s", exp)
         sys.exit(1)
+
+
     # start the desk controller
     try:
         await desk_controller.run()
@@ -97,7 +121,7 @@ async def run() -> None:
 
 def main() -> None:
     """Main entrypoint to the program."""
-    asyncio.run(run())
+    asyncio.run(run(), debug=False)
 
 
 if __name__ == "__main__":
