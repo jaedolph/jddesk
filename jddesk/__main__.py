@@ -1,103 +1,132 @@
 """Main entrypoints for the program."""
-import configparser
 import logging
-import pathlib
-import sys
 import asyncio
+import argparse
+import threading
+import traceback
 
-from bleak.exc import BleakError
+from jddesk import desk, common, setup_config
+from jddesk.display import web
+from jddesk.config import DeskConfig, DeskConfigError
 
-from requests import RequestException
-
-from jddesk import desk, twitch
-
-CONFIG_FILE_NAME = ".jddesk.ini"
 POLL_INTERVAL = 1
 
-DESK_UP_REWARD_NAME = "Change to Standing Desk"
-DESK_DOWN_REWARD_NAME = "Change to Sitting Desk"
-
 LOG = logging.getLogger("jddesk")
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S"
-)
 
 
-async def run() -> None:
-    """Initialises and runs the desk controller."""
+def load_config(config_file_path: str) -> DeskConfig:
+    """Loads config file.
 
-    # read config
-    config_file_path = str(pathlib.Path.home() / CONFIG_FILE_NAME)
-    config = configparser.ConfigParser()
-    config.read(config_file_path)
+    :param config_file_path: path to the config file to read
+    :return: DeskConfig object containing the configuration from the config file
+    """
 
     try:
         LOG.info("parsing config file...")
-        auth_token = config["TWITCH"]["AUTH_TOKEN"]
-        client_id = config["TWITCH"]["CLIENT_ID"]
-        broadcaster_id = config["TWITCH"]["BROADCASTER_ID"]
-        controller_mac = config["BLUETOOTH"]["CONTROLLER_MAC"]
-        display_server_url = config["DISPLAY_SERVER"]["URL"]
-    except KeyError as exp:
-        LOG.error("Missing config item: %s", exp)
-        sys.exit(1)
+        config = DeskConfig(config_file_path)
+        config.load_config()
+    except DeskConfigError as exp:
+        LOG.error("invalid config: %s", exp)
+        common.custom_exit(1)
 
-    # create TwitchAPI object from config
-    try:
-        twitch_api = twitch.TwitchAPI(
-            auth_token=auth_token,
-            client_id=client_id,
-            broadcaster_id=broadcaster_id,
-        )
-        rewards = twitch_api.get_rewards()
-    except RequestException as exp:
-        LOG.error("Could not initialise twitch connection: %s", exp)
-        sys.exit(1)
+    return config
 
-    # convert reward names to ids
-    try:
-        desk_up_reward_id = None
-        desk_down_reward_id = None
-        for reward in rewards:
-            title = reward["title"]
-            if title == DESK_UP_REWARD_NAME:
-                desk_up_reward_id = reward["id"]
-                continue
-            if title == DESK_DOWN_REWARD_NAME:
-                desk_down_reward_id = reward["id"]
-                continue
 
-        if not desk_up_reward_id:
-            raise KeyError(f"no reward id matching '{DESK_UP_REWARD_NAME}'")
-        if not desk_down_reward_id:
-            raise KeyError(f"no reward id matching '{DESK_DOWN_REWARD_NAME}'")
+async def run_controller(config: DeskConfig) -> None:
+    """Initializes and runs the desk controller.
 
-    except KeyError as exp:
-        LOG.error("Could not get reward ids: %s", exp)
-        sys.exit(1)
+    :param config: DeskConfig object containing the configuration
+    """
 
-    # create DeskController object from config
-    try:
-        desk_controller = desk.DeskController(
-            twitch_api=twitch_api,
-            controller_mac=controller_mac,
-            desk_up_reward_id=desk_up_reward_id,
-            desk_down_reward_id=desk_down_reward_id,
-            display_server_url=display_server_url,
-        )
-    except BleakError as exp:
-        LOG.error("Could not initialise bluetooth connection: %s", exp)
-        sys.exit(1)
+    desk_controller = desk.DeskController(config)
+
     # start the desk controller
     try:
         await desk_controller.run()
     except desk.FatalException:
-        sys.exit(1)
+        common.custom_exit(1)
+
+
+def run_display_server(config: DeskConfig) -> None:
+    """Start the display server.
+
+    :param config: DeskConfig object containing the configuration
+    """
+
+    LOG.info("starting display server")
+    host, port = config.display_server_address.split(":")
+
+    web.socketio.run(web.app, host=host, port=port, allow_unsafe_werkzeug=True)
+
+
+def run_setup_config(config_file_path: str) -> None:
+    """Run the configuration helper.
+
+    :param config_file_path: path to the config file to write/edit
+    """
+
+    LOG.info("starting configuration helper")
+    try:
+        asyncio.run(setup_config.configure(config_file_path))
+    except Exception as exp:  # pylint: disable=broad-exception-caught
+        traceback.print_tb(exp.__traceback__)
+        print(f"Fatal exception occurred: {exp}")
+        common.custom_exit(1)
+    common.custom_exit(0)
 
 
 def main() -> None:
     """Main entrypoint to the program."""
-    asyncio.run(run())
+
+    parser = argparse.ArgumentParser(
+        prog="jddesk", description="Controls your desk from twitch.tv events"
+    )
+    parser.add_argument("--configure", action="store_true", help="run the configuration utility")
+    parser.add_argument(
+        "--config-file", default=common.DEFAULT_CONFIG_FILE_PATH, help="path to config file"
+    )
+    parser.add_argument("--debug", action="store_true", help="turn on debug logging")
+    parser.add_argument("--log-file", help="path to log file")
+
+    args = parser.parse_args()
+
+    # configure logging
+    log_level = logging.INFO
+    log_handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if args.debug:
+        LOG.info("setting log level to DEBUG")
+        log_level = logging.DEBUG
+        LOG.debug("test")
+
+    if args.log_file:
+        log_handlers.append(logging.FileHandler(args.log_file))
+
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s %(message)s",
+        level=log_level,
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=log_handlers,
+    )
+
+    # run config helper utility if required
+    if args.configure:
+        run_setup_config(args.config_file)
+        return
+
+    # load config file
+    config = load_config(args.config_file)
+
+    # run display server in the background if required
+    display_server = None
+    if config.display_server_enabled:
+        display_server = threading.Thread(target=run_display_server, args=[config])
+        display_server.daemon = True
+        display_server.start()
+
+    # run the desk controller
+    asyncio.run(run_controller(config), debug=False)
+
+    common.custom_exit(0)
 
 
 if __name__ == "__main__":
