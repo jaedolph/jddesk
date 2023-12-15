@@ -1,0 +1,1 @@
+start "jddesk configuration utility" __main__.dist/jddesk.exe --configure --config-file jddesk.ini

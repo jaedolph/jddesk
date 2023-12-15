@@ -1,0 +1,28 @@
+name: Release Windows binaries
+
+on:
+  release:
+    types: [published]
+jobs:
+  build:
+    runs-on: 'windows-latest'
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: 3.11
+
+    - run: pip install . nuitka
+    - name: Build Windows binaries
+      run: |
+        nuitka --standalone --output-dir=dist/jddesk --include-package-data=jddesk -o jddesk.exe --remove-output --assume-yes-for-downloads .\jddesk\__main__.py
+        copy .\windows\* .\dist\jddesk
+        cd dist
+        powershell Compress-Archive jddesk jddesk-${{github.ref_name }}-windows-amd64.zip
+    - name: Upload release artifiacts
+      run: |
+        gh release upload ${{github.event.release.tag_name}} dist/jddesk-${{github.ref_name }}-windows-amd64.zip
+      env:
+        GITHUB_TOKEN: ${{ github.TOKEN }}
+      shell: bash

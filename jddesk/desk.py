@@ -4,40 +4,21 @@ import logging
 import signal
 import sys
 from types import FrameType
-from typing import Optional
+from typing import Any, Optional
 import asyncio
+from uuid import UUID
 
 import socketio
 from bleak import BleakClient
 from bleak.exc import BleakError
 from bleak.backends.characteristic import BleakGATTCharacteristic
-from requests import RequestException
+from twitchAPI.twitch import Twitch
+from twitchAPI.pubsub import PubSub
+from twitchAPI.type import CustomRewardRedemptionStatus, TwitchAPIException
+from twitchAPI.helper import first
 
-from jddesk.twitch import TwitchAPI
-
-# Commands specific to the OmniDesk bluetooth controller.
-# These commands were reverse engineered using packet captures of the bluetooth traffic.
-DESK_UP_GATT_CMD = b"\xF1\xF1\x06\x00\x06\x7E"  # command will move desk to height preset 2
-DESK_DOWN_GATT_CMD = b"\xF1\xF1\x05\x00\x05\x7E"  # command will move desk to height preset 1
-DESK_STOP_GATT_CMD = b"\xF1\xF1\x2b\x00\x2b\x7E"  # command will stop the desk from moving
-
-DESK_HEIGHT_READ_UUID = (
-    "0000ff02-0000-1000-8000-00805f9b34fb"  # GATT UUID for receiving height notifications
-)
-DESK_HEIGHT_WRITE_UUID = (
-    "0000ff01-0000-1000-8000-00805f9b34fb"  # GATT UUID for sending commands to the desk
-)
-
-# states for comparison
-STATE_GOING_UP = "GOING UP"
-STATE_GOING_DOWN = "GOING DOWN"
-STATE_STANDING = "STANDING"
-STATE_SITTING = "SITTING"
-STATE_STOPPED = "STOPPED"
-
-# these are hardcoded heights for my setup (in cm)
-DESK_HEIGHT_STANDING = 123.0
-DESK_HEIGHT_SITTING = 74.5
+from jddesk import common
+from jddesk.config import DeskConfig
 
 # time in seconds to wait between each poll of the twitch api
 POLL_INTERVAL = 1
@@ -49,8 +30,9 @@ class FatalException(Exception):
     """Custom exception when the controller fails and can't recover."""
 
 
+# pylint: disable=too-many-instance-attributes
 class DeskController:
-    """Polls the Twitch API for desk related channel points rewards.
+    """Controls the desk via bluetooth based on events from Twitch.
 
     If a reward is queued it will send commands to the desk's bluetooth control unit to move the
     desk to a standing or sitting position.
@@ -59,31 +41,33 @@ class DeskController:
     cannot be fulfilled e.g. if a user redeems "Change to Standing Desk" and the desk is already in
     the standing position.
 
-    :param twitch_api: TwitchAPI object for making request to the Twitch API
-    :param controller_mac: MAC address of the desk's bluetooth controller
-    :param desk_up_reward_id: UUID of the channel points reward for moving the desk up
-    :param desk_down_reward_id: UUID of the channel points reward for moving the desk down
-    :param display_server_url: url of the display server to send height updates to
+    The controller can also support listening for bits events.
+
+    :param config: DeskConfig object holding the configuration for the DeskController
     """
 
     def __init__(
         self,
-        twitch_api: TwitchAPI,
-        controller_mac: str,
-        desk_up_reward_id: str,
-        desk_down_reward_id: str,
-        display_server_url: str,
+        config: DeskConfig,
     ) -> None:
-        self.twitch_api = twitch_api
-        self.controller_mac = controller_mac
-        self.desk_up_reward_id = desk_up_reward_id
-        self.desk_down_reward_id = desk_down_reward_id
-        self.display_server_url = display_server_url
-        self.sio_client = socketio.Client(reconnection=False)
-        self.height = DESK_HEIGHT_SITTING
-        self.state = STATE_SITTING
+        self.config = config
 
-        self.client = BleakClient(controller_mac)
+        self.height = self.config.desk_height_sitting
+        self.state = common.STATE_SITTING
+
+        self.client = BleakClient(self.config.controller_mac)
+
+        if self.config.display_server_enabled:
+            self.sio_client = socketio.Client(reconnection=False)
+
+        self.running = False
+        self.twitch = None
+        self.broadcaster_id = None
+        self.desk_up_reward_id = None
+        self.desk_down_reward_id = None
+        self.pubsub = None
+        self.reconnect_bluetooth_required = False
+        self.reconnect_display_server_required = False
 
         # ensure graceful shutdown is handled on SIGINT and SIGTERM signals (only works for linux)
         try:
@@ -95,23 +79,17 @@ class DeskController:
     def exit_gracefully(self, signum: int, frame: Optional[FrameType]) -> None:
         """Gracefully shut down the controller."""
         del frame
+        self.running = False
         LOG.info("received signal %s", signum)
-        LOG.info("disconnecting from display server...")
-        self.sio_client.disconnect()
+        if self.pubsub:
+            LOG.info("stopping pubsub...")
+            self.pubsub.stop()
+            self.pubsub = None
+        if self.config.display_server_enabled:
+            LOG.info("disconnecting from display server...")
+            self.sio_client.disconnect()
         LOG.info("controller shutting down")
         sys.exit(0)
-
-    @staticmethod
-    def get_height_in_cm(data: bytes) -> float:
-        """Takes binary data from the height update notification and converts it to a height in cm.
-
-        :param data: data from the height update notification
-        :returns: the height in centimeters
-        """
-
-        height = int.from_bytes(data[-5:-3], "big") / 10.0
-
-        return height
 
     def on_notification(self, sender: BleakGATTCharacteristic, data: bytes) -> None:
         """Keep track of the desk height in realtime by listening for GATT notifications.
@@ -124,49 +102,102 @@ class DeskController:
         """
         del sender
 
-        height_new = self.get_height_in_cm(data)
+        height_new = common.get_height_in_cm(data)
 
         LOG.debug("height=%s height_new=%s", self.height, height_new)
         if height_new > self.height:
             # If height is increasing the desk is moving up.
-            self.state = STATE_GOING_UP
+            self.state = common.STATE_GOING_UP
         elif height_new < self.height:
             # If height is decreasing the desk is moving down.
-            self.state = STATE_GOING_DOWN
-        elif height_new > DESK_HEIGHT_STANDING - 2:
+            self.state = common.STATE_GOING_DOWN
+        elif height_new > self.config.desk_height_standing - 2:
             # If the desk is not changing height and close to standing position, assume we are
             # standing.
-            self.state = STATE_STANDING
-        elif height_new < DESK_HEIGHT_SITTING + 2:
+            self.state = common.STATE_STANDING
+        elif height_new < self.config.desk_height_sitting + 2:
             # If the desk is not changing height and close to sitting position, assume we are
             # sitting.
-            self.state = STATE_SITTING
+            self.state = common.STATE_SITTING
         else:
             # If the desk isn't moving and is somewhere between the sitting and standing
             # position, it probably got stuck or manually stopped so mark it as stopped.
-            self.state = STATE_STOPPED
+            self.state = common.STATE_STOPPED
 
         self.height = height_new
         LOG.debug("state=%s", self.state)
+        if self.config.display_server_enabled:
+            self.display_height()
 
-        self.display_height()
+    async def callback_bits(self, uuid: UUID, data: dict[str, Any]) -> None:
+        """Callback for bit redemptions that moves desk according to the message.
+
+        :param uuid: uuid of the pubsub message
+        :param data: data of the pubsub message
+        """
+        del uuid
+        bits_used = data["data"]["bits_used"]
+        chat_message = data["data"]["chat_message"]
+        user = data["data"]["user_name"]
+        if not user:
+            user = "anonymous"
+
+        if bits_used < self.config.min_bits:
+            LOG.info("Not enough bits to move desk")
+            return
+
+        if common.DESK_UP_BITS_COMMAND in chat_message.split(" "):
+            LOG.info("%s command found", common.DESK_UP_BITS_COMMAND)
+            LOG.info("%s is moving desk up", user)
+            await self.move_desk_up()
+        elif common.DESK_DOWN_BITS_COMMAND in chat_message.split(" "):
+            LOG.info("%s command found", common.DESK_DOWN_BITS_COMMAND)
+            LOG.info("%s is moving desk down", user)
+            await self.move_desk_down()
+        elif common.DESK_GENERIC_BITS_COMMAND in chat_message.split(" "):
+            LOG.info("%s command found", common.DESK_GENERIC_BITS_COMMAND)
+            if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
+                LOG.info("%s is moving desk up", user)
+                await self.move_desk_up()
+            elif self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
+                LOG.info("%s is moving desk down", user)
+                await self.move_desk_down()
+        else:
+            LOG.info("No desk command found in bits message")
+
+    async def callback_channel_points(self, uuid: UUID, data: dict[str, Any]) -> None:
+        """Callback for channel point redemptions that moves desk according to the reward redeemed.
+
+        :param uuid: uuid of the pubsub message
+        :param data: data of the pubsub message
+        """
+        del uuid
+        reward_id = data["data"]["redemption"]["reward"]["id"]
+        redemption_id = data["data"]["redemption"]["id"]
+        user = data["data"]["redemption"]["user"]["display_name"]
+
+        if reward_id == self.desk_up_reward_id:
+            await self.handle_desk_up_reward(redemption_id, user)
+        if reward_id == self.desk_down_reward_id:
+            await self.handle_desk_down_reward(redemption_id, user)
 
     async def move_desk_up(self) -> None:
         """Sends commands to the desk to move it to the standing position."""
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_STOP_GATT_CMD)
+
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_UP_GATT_CMD)
-        self.state = STATE_GOING_UP
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_UP_GATT_CMD)
+        self.state = common.STATE_GOING_UP
 
     async def move_desk_down(self) -> None:
         """Sends commands to the desk to move it to the sitting position."""
 
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_STOP_GATT_CMD)
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_DOWN_GATT_CMD)
-        self.state = STATE_GOING_DOWN
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_DOWN_GATT_CMD)
+        self.state = common.STATE_GOING_DOWN
 
-    async def reconnect(self) -> None:
+    async def reconnect_bluetooth(self) -> None:
         """Attempts to reconnect to desk via bluetooth."""
 
         LOG.info("attempting to reconnect to desk via bluetooth...")
@@ -175,23 +206,29 @@ class DeskController:
             await asyncio.sleep(1)
             await self.client.connect()
             await asyncio.sleep(1)
-        except BleakError as exp:
+            self.reconnect_bluetooth_required = False
+        except (BleakError, OSError, TimeoutError) as exp:
             LOG.error("failed to reconnect: %s", exp)
             return
 
         LOG.info("reconnected successfully")
+
+    async def reconnect_display_server(self) -> None:
+        """Attempts to recconect to the display server."""
+        try:
+            self.sio_client.connect("http://" + self.config.display_server_address)
+            LOG.info("reconnected to display server")
+        except socketio.client.exceptions.SocketIOError as exp:
+            LOG.error("failed to reconnect: %s", exp)
+            self.reconnect_display_server_required = False
 
     def display_height(self) -> None:
         """Sends a height update to the display server."""
         try:
             self.sio_client.emit("height_update", str(self.height))
         except socketio.client.exceptions.SocketIOError:
-            LOG.error("failed to connect to display server, attempting to reconnect...")
-            try:
-                self.sio_client.connect(self.display_server_url)
-                LOG.info("reconnected to display server")
-            except socketio.client.exceptions.SocketIOError as exp:
-                LOG.error("failed to reconnect: %s", exp)
+            LOG.error("failed to connect to display server")
+            self.reconnect_display_server_required = True
 
     async def handle_desk_up_reward(self, redemption_id: str, user: str) -> None:
         """Handle a singular "Change to Standing Desk" channel points redemption.
@@ -200,18 +237,37 @@ class DeskController:
         :param user: name of the user claiming the redemption
         :raises BTBaseException: when there is an issue communicating with the desk
         """
-
-        if self.state in (STATE_GOING_UP, STATE_STANDING):
+        assert self.desk_up_reward_id is not None
+        if self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
             LOG.info("refunding %s (desk moving up or standing already)", user)
-            self.twitch_api.mark_reward_done(
-                self.desk_up_reward_id, redemption_id, self.twitch_api.CANCELED
+            await self.twitch.update_redemption_status(
+                self.broadcaster_id,
+                self.desk_up_reward_id,
+                redemption_id,
+                CustomRewardRedemptionStatus.CANCELED,
             )
             return
-        LOG.info("%s is moving desk up", user)
-        await self.move_desk_up()
 
-        self.twitch_api.mark_reward_done(
-            self.desk_up_reward_id, redemption_id, self.twitch_api.FULFILLED
+        LOG.info("%s is moving desk up", user)
+        try:
+            await self.move_desk_up()
+        except (BleakError, OSError) as exp:
+            LOG.error("failed to move desk up: %s", exp)
+            self.reconnect_bluetooth_required = True
+            LOG.info("refunding %s (failed to move desk)", user)
+            await self.twitch.update_redemption_status(
+                self.broadcaster_id,
+                self.desk_up_reward_id,
+                redemption_id,
+                CustomRewardRedemptionStatus.CANCELED,
+            )
+            return
+
+        await self.twitch.update_redemption_status(
+            self.broadcaster_id,
+            self.desk_up_reward_id,
+            redemption_id,
+            CustomRewardRedemptionStatus.FULFILLED,
         )
 
     async def handle_desk_down_reward(self, redemption_id: str, user: str) -> None:
@@ -221,76 +277,126 @@ class DeskController:
         :param user: name of the user claiming the redemption
         :raises BTBaseException: when there is an issue communicating with the desk
         """
-
-        if self.state in (STATE_GOING_DOWN, STATE_SITTING):
+        assert self.desk_down_reward_id is not None
+        if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
             LOG.info("refunding %s (desk moving down or sitting already)", user)
-            self.twitch_api.mark_reward_done(
-                self.desk_down_reward_id, redemption_id, self.twitch_api.CANCELED
+            await self.twitch.update_redemption_status(
+                self.broadcaster_id,
+                self.desk_down_reward_id,
+                redemption_id,
+                CustomRewardRedemptionStatus.CANCELED,
             )
             return
         LOG.info("%s is moving desk down", user)
-        await self.move_desk_down()
+        try:
+            await self.move_desk_down()
+        except (BleakError, OSError) as exp:
+            LOG.error("failed to move desk down: %s", exp)
+            self.reconnect_bluetooth_required = True
+            LOG.info("refunding %s (failed to move desk)", user)
+            await self.twitch.update_redemption_status(
+                self.broadcaster_id,
+                self.desk_up_reward_id,
+                redemption_id,
+                CustomRewardRedemptionStatus.CANCELED,
+            )
+            return
 
-        self.twitch_api.mark_reward_done(
-            self.desk_down_reward_id, redemption_id, self.twitch_api.FULFILLED
+        await self.twitch.update_redemption_status(
+            self.broadcaster_id,
+            self.desk_down_reward_id,
+            redemption_id,
+            CustomRewardRedemptionStatus.FULFILLED,
         )
 
-    async def poll(self) -> None:
-        """Poll the Twitch API for desk related channel points channel points redemptions."""
+    async def configure_twitch(self) -> None:
+        """Configures connection to the twitch API and sets up event listeners."""
 
-        try:
-            # handle "Change to Standing Desk" channel points redemptions in the queue
-            unfulfilled_up = self.twitch_api.get_redemptions(self.desk_up_reward_id)
-            for redemption in unfulfilled_up:
-                redemption_id = redemption["id"]
-                user = redemption["user_name"]
-                await self.handle_desk_up_reward(redemption_id, user)
+        LOG.info("configuring twitch authentication...")
+        self.twitch = await Twitch(self.config.client_id, self.config.client_secret)
+        assert self.twitch is not None
+        await self.twitch.authenticate_app([])
+        target_scope = common.get_target_scope(
+            self.config.channel_points_enabled, self.config.bits_enabled
+        )
 
-            # handle "Change to Sitting Desk" channel points redemptions in the queue
-            unfulfilled_down = self.twitch_api.get_redemptions(self.desk_down_reward_id)
-            for redemption in unfulfilled_down:
-                redemption_id = redemption["id"]
-                user = redemption["user_name"]
-                await self.handle_desk_down_reward(redemption_id, user)
+        await self.twitch.set_user_authentication(
+            self.config.auth_token, target_scope, self.config.refresh_token
+        )
+        broadcaster = await first(self.twitch.get_users(logins=[self.config.broadcaster_name]))
+        assert broadcaster is not None
+        self.broadcaster_id = broadcaster.id
 
-        except RequestException as exp:
-            LOG.exception("Error making request to twitch: %s", exp)
-        except KeyError as exp:
-            LOG.exception("Error with data returned: %s", exp)
-        except BleakError as exp:
-            LOG.exception("Bluetooth error: %s", exp)
-            # attempt to reconnect
-            await self.reconnect()
-        except Exception as exp:  # pylint: disable=broad-except
-            LOG.exception("Unknown error: %s", exp)
+        self.pubsub = PubSub(self.twitch, callback_loop=asyncio.get_running_loop())
+        assert self.pubsub is not None
+        self.pubsub.start()
+
+        if self.config.channel_points_enabled:
+            LOG.info("checking channel points rewards...")
+            assert self.config.desk_up_reward_name is not None
+            assert self.config.desk_down_reward_name is not None
+            assert self.broadcaster_id is not None
+            self.desk_up_reward_id, self.desk_down_reward_id = await common.set_up_channel_points(
+                self.twitch,
+                self.broadcaster_id,
+                self.config.desk_up_reward_name,
+                self.config.desk_down_reward_name,
+            )
+            LOG.info("listening for channel points...")
+            await self.pubsub.listen_channel_points(
+                self.broadcaster_id, self.callback_channel_points
+            )
+
+        if self.config.bits_enabled:
+            LOG.info("listening for bits...")
+            await self.pubsub.listen_bits(self.broadcaster_id, self.callback_bits)
 
     async def run(self) -> None:
-        """Run the polling loop."""
+        """Run the desk controller."""
+
+        self.running = True
+        if self.config.display_server_enabled:
+            # connect to the display server
+            LOG.info(
+                "connecting to display server at http://%s...", self.config.display_server_address
+            )
+            try:
+                self.sio_client.connect("http://" + self.config.display_server_address)
+            except socketio.client.exceptions.SocketIOError as exp:
+                LOG.error(
+                    "failed to connect to display server at %s: %s",
+                    self.config.display_server_address,
+                    exp,
+                )
+                raise FatalException from exp
 
         # connect to the desk via bluetooth
-        LOG.info("connecting to desk bluetooth controller at %s...", self.controller_mac)
+        LOG.info("connecting to desk bluetooth controller at %s...", self.config.controller_mac)
         try:
             await self.client.connect()
             # start notifier for desk heigh updates
-            await self.client.start_notify(DESK_HEIGHT_READ_UUID, self.on_notification)
-            # test moving the desk to sitting position
+            await self.client.start_notify(common.DESK_HEIGHT_READ_UUID, self.on_notification)
+            # ensure desk is in sitting position
+            LOG.info("ensuring desk is in sitting position...")
             await self.move_desk_down()
-        except BleakError as exp:
+        except (BleakError, OSError) as exp:
             LOG.error("failed to connect to desk via bluetooth: %s", exp)
             raise FatalException from exp
 
-        # connect to the display server
-        LOG.info("connecting to display server at %s...", self.display_server_url)
         try:
-            self.sio_client.connect(self.display_server_url)
-        except socketio.client.exceptions.SocketIOError as exp:
-            LOG.error("failed to connect to display server at %s: %s", self.display_server_url, exp)
+            # configure twitch api connectivity
+            await self.configure_twitch()
+        except TwitchAPIException as exp:
+            LOG.error("failed to configure twitch api connectivity: %s", exp)
             raise FatalException from exp
 
-        # run the polling loop
-        LOG.info("starting twitch api poll loop...")
-        while True:
-            LOG.debug("polling twitch api")
-            await self.poll()
-            self.display_height()
+        LOG.info("finished starting controller")
+        while self.running:
+            LOG.debug("controller is running")
+            if self.config.display_server_enabled:
+                if self.reconnect_display_server_required:
+                    await self.reconnect_display_server()
+                self.display_height()
+            if self.reconnect_bluetooth_required:
+                await self.reconnect_bluetooth()
             await asyncio.sleep(POLL_INTERVAL)
