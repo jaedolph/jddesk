@@ -229,4 +229,9 @@ async def main():
         config.write(config_file)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as exp:
+        print(f"Fatal exception occured: {exp}")
+        common.exit(1)
+    common.exit(0)

@@ -1,3 +1,6 @@
+import sys
+import os
+
 # Commands specific to the OmniDesk bluetooth controller.
 # These commands were reverse engineered using packet captures of the bluetooth traffic.
 DESK_UP_GATT_CMD = b"\xF1\xF1\x06\x00\x06\x7E"  # command will move desk to height preset 2
@@ -23,6 +26,11 @@ DESK_DOWN_BITS_COMMAND = "!desksit"
 DESK_GENERIC_BITS_COMMAND = "!desk"
 
 CONFIG_FILE_NAME = "jddesk.ini"
+
+def exit(return_code: int):
+    if os.name == 'nt':
+        input("Press `ENTER` to exit")
+    sys.exit(return_code)
 
 def get_height_in_cm(data: bytes) -> float:
     """Takes binary data from the height update notification and converts it to a height in cm.

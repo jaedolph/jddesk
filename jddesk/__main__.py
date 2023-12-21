@@ -2,7 +2,6 @@
 import configparser
 import logging
 import pathlib
-import sys
 import asyncio
 
 from bleak.exc import BleakError
@@ -22,7 +21,6 @@ LOG = logging.getLogger("jddesk")
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s", level=logging.DEBUG, datefmt="%Y-%m-%d %H:%M:%S"
 )
-
 
 async def run() -> None:
     """Initialises and runs the desk controller."""
@@ -59,7 +57,7 @@ async def run() -> None:
             desk_down_reward_name = config["TWITCH"]["DESK_DOWN_REWARD_NAME"]
     except KeyError as exp:
         LOG.error("Missing config item: %s", exp)
-        sys.exit(1)
+        common.exit(1)
 
     # create TwitchAPI object from config
     try:
@@ -78,7 +76,7 @@ async def run() -> None:
         broadcaster_id = broadcaster.id
     except Exception as exp:
         LOG.error("Could not initialise twitch connection: %s", exp)
-        sys.exit(1)
+        common.exit(1)
 
     if use_channel_points:
         # configure channel points reward
@@ -105,19 +103,19 @@ async def run() -> None:
         )
     except BleakError as exp:
         LOG.error("Could not initialise bluetooth connection: %s", exp)
-        sys.exit(1)
+        common.exit(1)
 
     # start the desk controller
     try:
         await desk_controller.run()
     except desk.FatalException:
-        sys.exit(1)
+        common.exit(1)
 
 
 def main() -> None:
     """Main entrypoint to the program."""
     asyncio.run(run(), debug=False)
-
+    common.exit(0)
 
 if __name__ == "__main__":
     main()
