@@ -16,29 +16,7 @@ from twitchAPI.twitch import Twitch
 from twitchAPI.pubsub import PubSub
 from twitchAPI.type import CustomRewardRedemptionStatus
 
-# Commands specific to the OmniDesk bluetooth controller.
-# These commands were reverse engineered using packet captures of the bluetooth traffic.
-DESK_UP_GATT_CMD = b"\xF1\xF1\x06\x00\x06\x7E"  # command will move desk to height preset 2
-DESK_DOWN_GATT_CMD = b"\xF1\xF1\x05\x00\x05\x7E"  # command will move desk to height preset 1
-DESK_STOP_GATT_CMD = b"\xF1\xF1\x2b\x00\x2b\x7E"  # command will stop the desk from moving
-
-DESK_HEIGHT_READ_UUID = (
-    "0000ff02-0000-1000-8000-00805f9b34fb"  # GATT UUID for receiving height notifications
-)
-DESK_HEIGHT_WRITE_UUID = (
-    "0000ff01-0000-1000-8000-00805f9b34fb"  # GATT UUID for sending commands to the desk
-)
-
-# states for comparison
-STATE_GOING_UP = "GOING UP"
-STATE_GOING_DOWN = "GOING DOWN"
-STATE_STANDING = "STANDING"
-STATE_SITTING = "SITTING"
-STATE_STOPPED = "STOPPED"
-
-# these are hardcoded heights for my setup (in cm)
-DESK_HEIGHT_STANDING = 123.0
-DESK_HEIGHT_SITTING = 74.5
+from jddesk import common
 
 # time in seconds to wait between each poll of the twitch api
 POLL_INTERVAL = 1
@@ -74,6 +52,9 @@ class DeskController:
         controller_mac: str,
         desk_up_reward_id: str,
         desk_down_reward_id: str,
+        desk_height_sitting: float,
+        desk_height_standing: float,
+        min_bits: int,
         display_server_url: str,
     ) -> None:
         self.twitch = twitch
@@ -81,9 +62,16 @@ class DeskController:
         self.desk_up_reward_id = desk_up_reward_id
         self.desk_down_reward_id = desk_down_reward_id
         self.display_server_url = display_server_url
-        self.sio_client = socketio.Client(reconnection=False)
-        self.height = DESK_HEIGHT_SITTING
-        self.state = STATE_SITTING
+        if self.display_server_url is not None:
+            self.sio_client = socketio.Client(reconnection=False)
+
+        self.desk_height_sitting = desk_height_sitting
+        self.desk_height_standing = desk_height_standing
+
+        self.min_bits = min_bits
+
+        self.height = desk_height_sitting
+        self.state = common.STATE_SITTING
 
         self.client = BleakClient(controller_mac)
 
@@ -105,22 +93,11 @@ class DeskController:
         LOG.info("received signal %s", signum)
         LOG.info("stopping pubsub...")
         self.pubsub.stop()
-        LOG.info("disconnecting from display server...")
-        self.sio_client.disconnect()
+        if self.display_server_url is not None:
+            LOG.info("disconnecting from display server...")
+            self.sio_client.disconnect()
         LOG.info("controller shutting down")
         sys.exit(0)
-
-    @staticmethod
-    def get_height_in_cm(data: bytes) -> float:
-        """Takes binary data from the height update notification and converts it to a height in cm.
-
-        :param data: data from the height update notification
-        :returns: the height in centimeters
-        """
-
-        height = int.from_bytes(data[-5:-3], "big") / 10.0
-
-        return height
 
     def on_notification(self, sender: BleakGATTCharacteristic, data: bytes) -> None:
         """Keep track of the desk height in realtime by listening for GATT notifications.
@@ -133,32 +110,64 @@ class DeskController:
         """
         del sender
 
-        height_new = self.get_height_in_cm(data)
+        height_new = common.get_height_in_cm(data)
 
         LOG.debug("height=%s height_new=%s", self.height, height_new)
         if height_new > self.height:
             # If height is increasing the desk is moving up.
-            self.state = STATE_GOING_UP
+            self.state = common.STATE_GOING_UP
         elif height_new < self.height:
             # If height is decreasing the desk is moving down.
-            self.state = STATE_GOING_DOWN
-        elif height_new > DESK_HEIGHT_STANDING - 2:
+            self.state = common.STATE_GOING_DOWN
+        elif height_new > self.desk_height_standing - 2:
             # If the desk is not changing height and close to standing position, assume we are
             # standing.
-            self.state = STATE_STANDING
-        elif height_new < DESK_HEIGHT_SITTING + 2:
+            self.state = common.STATE_STANDING
+        elif height_new < self.desk_height_sitting + 2:
             # If the desk is not changing height and close to sitting position, assume we are
             # sitting.
-            self.state = STATE_SITTING
+            self.state = common.STATE_SITTING
         else:
             # If the desk isn't moving and is somewhere between the sitting and standing
             # position, it probably got stuck or manually stopped so mark it as stopped.
-            self.state = STATE_STOPPED
+            self.state = common.STATE_STOPPED
 
         self.height = height_new
         LOG.debug("state=%s", self.state)
+        if self.display_server_url is not None:
+            self.display_height()
 
-        self.display_height()
+    async def callback_bits(self, uuid, data: dict) -> None:
+        del uuid
+        bits_used = data["data"]["bits_used"]
+        chat_message = data["data"]["chat_message"]
+        user = data["data"]["user_name"]
+        if not user:
+            user = "anonymous"
+
+        if bits_used < self.min_bits:
+            LOG.info("Not enough bits to move desk")
+            return
+
+        if common.DESK_UP_BITS_COMMAND in chat_message.split(" "):
+            LOG.info("%s command found", common.DESK_UP_BITS_COMMAND)
+            LOG.info("%s is moving desk up", user)
+            await self.move_desk_up()
+        elif common.DESK_DOWN_BITS_COMMAND in chat_message.split(" "):
+            LOG.info("%s command found", common.DESK_DOWN_BITS_COMMAND)
+            LOG.info("%s is moving desk down", user)
+            await self.move_desk_down()
+        elif common.DESK_GENERIC_BITS_COMMAND in chat_message.split(" "):
+            LOG.info("%s command found", common.DESK_GENERIC_BITS_COMMAND)
+            if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
+                LOG.info("%s is moving desk up", user)
+                await self.move_desk_up()
+            elif self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
+                LOG.info("%s is moving desk down", user)
+                await self.move_desk_down()
+        else:
+            LOG.info("No desk command found in bits message")
+
 
     async def callback_channel_points(self, uuid, data: dict) -> None:
         del uuid
@@ -171,20 +180,21 @@ class DeskController:
         if reward_id == self.desk_down_reward_id:
             await self.handle_desk_down_reward(redemption_id, user)
 
+
     async def move_desk_up(self) -> None:
         """Sends commands to the desk to move it to the standing position."""
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_STOP_GATT_CMD)
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_UP_GATT_CMD)
-        self.state = STATE_GOING_UP
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_UP_GATT_CMD)
+        self.state = common.STATE_GOING_UP
 
     async def move_desk_down(self) -> None:
         """Sends commands to the desk to move it to the sitting position."""
 
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_STOP_GATT_CMD)
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(DESK_HEIGHT_WRITE_UUID, DESK_DOWN_GATT_CMD)
-        self.state = STATE_GOING_DOWN
+        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_DOWN_GATT_CMD)
+        self.state = common.STATE_GOING_DOWN
 
     async def reconnect(self) -> None:
         """Attempts to reconnect to desk via bluetooth."""
@@ -221,7 +231,7 @@ class DeskController:
         :raises BTBaseException: when there is an issue communicating with the desk
         """
 
-        if self.state in (STATE_GOING_UP, STATE_STANDING):
+        if self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
             LOG.info("refunding %s (desk moving up or standing already)", user)
             await self.twitch.update_redemption_status(
                 self.broadcaster_id,
@@ -248,7 +258,7 @@ class DeskController:
         :raises BTBaseException: when there is an issue communicating with the desk
         """
 
-        if self.state in (STATE_GOING_DOWN, STATE_SITTING):
+        if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
             LOG.info("refunding %s (desk moving down or sitting already)", user)
             await self.twitch.update_redemption_status(
                 self.broadcaster_id,
@@ -269,33 +279,41 @@ class DeskController:
 
     async def run(self) -> None:
         """Run the polling loop."""
-        LOG.info("event loop %s", asyncio.get_running_loop())
         # connect to the desk via bluetooth
         LOG.info("connecting to desk bluetooth controller at %s...", self.controller_mac)
         try:
             await self.client.connect()
             # start notifier for desk heigh updates
-            await self.client.start_notify(DESK_HEIGHT_READ_UUID, self.on_notification)
+            await self.client.start_notify(common.DESK_HEIGHT_READ_UUID, self.on_notification)
             # test moving the desk to sitting position
             await self.move_desk_down()
         except BleakError as exp:
             LOG.error("failed to connect to desk via bluetooth: %s", exp)
             raise FatalException from exp
 
-        # connect to the display server
-        LOG.info("connecting to display server at %s...", self.display_server_url)
-        try:
-            self.sio_client.connect(self.display_server_url)
-        except socketio.client.exceptions.SocketIOError as exp:
-            LOG.error("failed to connect to display server at %s: %s", self.display_server_url, exp)
-            raise FatalException from exp
+        if self.display_server_url is not None:
+            # connect to the display server
+            LOG.info("connecting to display server at %s...", self.display_server_url)
+            try:
+                self.sio_client.connect(self.display_server_url)
+            except socketio.client.exceptions.SocketIOError as exp:
+                LOG.error("failed to connect to display server at %s: %s", self.display_server_url, exp)
+                raise FatalException from exp
 
         self.pubsub.start()
-        await self.pubsub.listen_channel_points(self.broadcaster_id, self.callback_channel_points)
+
+        # listen for channel points
+        if self.desk_up_reward_id is not None:
+            await self.pubsub.listen_channel_points(self.broadcaster_id, self.callback_channel_points)
+
+        # listen for bits
+        if self.min_bits is not None:
+            await self.pubsub.listen_bits(self.broadcaster_id, self.callback_bits)
 
         # run the polling loop
-        LOG.info("starting twitch api poll loop...")
+        LOG.info("Listening for twitch channel points and/or bits events")
         while True:
             LOG.debug("polling twitch api")
-            self.display_height()
+            if self.display_server_url is not None:
+                self.display_height()
             await asyncio.sleep(POLL_INTERVAL)

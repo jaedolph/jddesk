@@ -14,6 +14,7 @@ dependencies = [
     "python-socketio[client]",
     "bleak",
     "twitchAPI",
+    "pwinput",
 ]
 
 [project.scripts]
