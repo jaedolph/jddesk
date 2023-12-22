@@ -30,8 +30,9 @@ class FatalException(Exception):
     """Custom exception when the controller fails and can't recover."""
 
 
+# pylint: disable=too-many-instance-attributes
 class DeskController:
-    """Polls the Twitch API for desk related channel points rewards.
+    """Controls the desk via bluetooth based on events from Twitch.
 
     If a reward is queued it will send commands to the desk's bluetooth control unit to move the
     desk to a standing or sitting position.
@@ -40,11 +41,9 @@ class DeskController:
     cannot be fulfilled e.g. if a user redeems "Change to Standing Desk" and the desk is already in
     the standing position.
 
-    :param twitch: Twitch object for interacting with the Twitch API
-    :param controller_mac: MAC address of the desk's bluetooth controller
-    :param desk_up_reward_id: UUID of the channel points reward for moving the desk up
-    :param desk_down_reward_id: UUID of the channel points reward for moving the desk down
-    :param display_server_url: url of the display server to send height updates to
+    The controller can also support listening for bits events.
+
+    :param config: DeskConfig object holding the configuration for the DeskController
     """
 
     def __init__(
@@ -66,6 +65,8 @@ class DeskController:
         self.desk_up_reward_id = None
         self.desk_down_reward_id = None
         self.pubsub = None
+        self.reconnect_bluetooth_required = False
+        self.reconnect_display_server_required = False
 
         # ensure graceful shutdown is handled on SIGINT and SIGTERM signals (only works for linux)
         try:
@@ -179,6 +180,7 @@ class DeskController:
 
     async def move_desk_up(self) -> None:
         """Sends commands to the desk to move it to the standing position."""
+
         await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
         await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_UP_GATT_CMD)
@@ -192,7 +194,7 @@ class DeskController:
         await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_DOWN_GATT_CMD)
         self.state = common.STATE_GOING_DOWN
 
-    async def reconnect(self) -> None:
+    async def reconnect_bluetooth(self) -> None:
         """Attempts to reconnect to desk via bluetooth."""
 
         LOG.info("attempting to reconnect to desk via bluetooth...")
@@ -201,23 +203,29 @@ class DeskController:
             await asyncio.sleep(1)
             await self.client.connect()
             await asyncio.sleep(1)
-        except BleakError as exp:
+            self.reconnect_bluetooth_required = False
+        except (BleakError, OSError, TimeoutError) as exp:
             LOG.error("failed to reconnect: %s", exp)
             return
 
         LOG.info("reconnected successfully")
+
+    async def reconnect_display_server(self) -> None:
+        """Attempts to recconect to the display server."""
+        try:
+            self.sio_client.connect(self.config.display_server_url)
+            LOG.info("reconnected to display server")
+        except socketio.client.exceptions.SocketIOError as exp:
+            LOG.error("failed to reconnect: %s", exp)
+            self.reconnect_display_server_required = False
 
     def display_height(self) -> None:
         """Sends a height update to the display server."""
         try:
             self.sio_client.emit("height_update", str(self.height))
         except socketio.client.exceptions.SocketIOError:
-            LOG.error("failed to connect to display server, attempting to reconnect...")
-            try:
-                self.sio_client.connect(self.config.display_server_url)
-                LOG.info("reconnected to display server")
-            except socketio.client.exceptions.SocketIOError as exp:
-                LOG.error("failed to reconnect: %s", exp)
+            LOG.error("failed to connect to display server")
+            self.reconnect_display_server_required = True
 
     async def handle_desk_up_reward(self, redemption_id: str, user: str) -> None:
         """Handle a singular "Change to Standing Desk" channel points redemption.
@@ -236,8 +244,21 @@ class DeskController:
                 CustomRewardRedemptionStatus.CANCELED,
             )
             return
+
         LOG.info("%s is moving desk up", user)
-        await self.move_desk_up()
+        try:
+            await self.move_desk_up()
+        except (BleakError, OSError) as exp:
+            LOG.error("failed to move desk up: %s", exp)
+            self.reconnect_bluetooth_required = True
+            LOG.info("refunding %s (failed to move desk)", user)
+            await self.twitch.update_redemption_status(
+                self.broadcaster_id,
+                self.desk_up_reward_id,
+                redemption_id,
+                CustomRewardRedemptionStatus.CANCELED,
+            )
+            return
 
         await self.twitch.update_redemption_status(
             self.broadcaster_id,
@@ -264,7 +285,19 @@ class DeskController:
             )
             return
         LOG.info("%s is moving desk down", user)
-        await self.move_desk_down()
+        try:
+            await self.move_desk_down()
+        except (BleakError, OSError) as exp:
+            LOG.error("failed to move desk down: %s", exp)
+            self.reconnect_bluetooth_required = True
+            LOG.info("refunding %s (failed to move desk)", user)
+            await self.twitch.update_redemption_status(
+                self.broadcaster_id,
+                self.desk_up_reward_id,
+                redemption_id,
+                CustomRewardRedemptionStatus.CANCELED,
+            )
+            return
 
         await self.twitch.update_redemption_status(
             self.broadcaster_id,
@@ -317,25 +350,6 @@ class DeskController:
 
     async def run(self) -> None:
         """Run the desk controller."""
-        # connect to the desk via bluetooth
-        LOG.info("connecting to desk bluetooth controller at %s...", self.config.controller_mac)
-        try:
-            await self.client.connect()
-            # start notifier for desk heigh updates
-            await self.client.start_notify(common.DESK_HEIGHT_READ_UUID, self.on_notification)
-            # ensure desk is in sitting position
-            LOG.info("ensuring desk is in sitting position...")
-            await self.move_desk_down()
-        except BleakError as exp:
-            LOG.error("failed to connect to desk via bluetooth: %s", exp)
-            raise FatalException from exp
-
-        try:
-            # configure twitch api connectivity
-            await self.configure_twitch()
-        except TwitchAPIException as exp:
-            LOG.error("failed to configure twitch api connectivity: %s", exp)
-            raise FatalException from exp
 
         if self.config.display_server_enabled:
             # connect to the display server
@@ -350,9 +364,33 @@ class DeskController:
                 )
                 raise FatalException from exp
 
+        # connect to the desk via bluetooth
+        LOG.info("connecting to desk bluetooth controller at %s...", self.config.controller_mac)
+        try:
+            await self.client.connect()
+            # start notifier for desk heigh updates
+            await self.client.start_notify(common.DESK_HEIGHT_READ_UUID, self.on_notification)
+            # ensure desk is in sitting position
+            LOG.info("ensuring desk is in sitting position...")
+            await self.move_desk_down()
+        except (BleakError, OSError) as exp:
+            LOG.error("failed to connect to desk via bluetooth: %s", exp)
+            raise FatalException from exp
+
+        try:
+            # configure twitch api connectivity
+            await self.configure_twitch()
+        except TwitchAPIException as exp:
+            LOG.error("failed to configure twitch api connectivity: %s", exp)
+            raise FatalException from exp
+
         LOG.info("finished starting controller")
         while True:
             LOG.debug("controller is running")
             if self.config.display_server_enabled:
+                if self.reconnect_display_server_required:
+                    await self.reconnect_display_server()
                 self.display_height()
+            if self.reconnect_bluetooth_required:
+                await self.reconnect_bluetooth()
             await asyncio.sleep(POLL_INTERVAL)
