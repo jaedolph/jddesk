@@ -4,19 +4,21 @@ import logging
 import signal
 import sys
 from types import FrameType
-from typing import Optional
+from typing import Any, Optional
 import asyncio
+from uuid import UUID
 
 import socketio
 from bleak import BleakClient
 from bleak.exc import BleakError
 from bleak.backends.characteristic import BleakGATTCharacteristic
-from requests import RequestException
 from twitchAPI.twitch import Twitch
 from twitchAPI.pubsub import PubSub
-from twitchAPI.type import CustomRewardRedemptionStatus
+from twitchAPI.type import CustomRewardRedemptionStatus, TwitchAPIException
+from twitchAPI.helper import first
 
 from jddesk import common
+from jddesk.config import DeskConfig
 
 # time in seconds to wait between each poll of the twitch api
 POLL_INTERVAL = 1
@@ -38,7 +40,7 @@ class DeskController:
     cannot be fulfilled e.g. if a user redeems "Change to Standing Desk" and the desk is already in
     the standing position.
 
-    :param twitch: TwitchAPI.Twitch object for interacting with the Twitch API
+    :param twitch: Twitch object for interacting with the Twitch API
     :param controller_mac: MAC address of the desk's bluetooth controller
     :param desk_up_reward_id: UUID of the channel points reward for moving the desk up
     :param desk_down_reward_id: UUID of the channel points reward for moving the desk down
@@ -47,38 +49,23 @@ class DeskController:
 
     def __init__(
         self,
-        twitch: Twitch,
-        broadcaster_id: str,
-        controller_mac: str,
-        desk_up_reward_id: str,
-        desk_down_reward_id: str,
-        desk_height_sitting: float,
-        desk_height_standing: float,
-        min_bits: int,
-        display_server_url: str,
+        config: DeskConfig,
     ) -> None:
-        self.twitch = twitch
-        self.controller_mac = controller_mac
-        self.desk_up_reward_id = desk_up_reward_id
-        self.desk_down_reward_id = desk_down_reward_id
-        self.display_server_url = display_server_url
-        if self.display_server_url is not None:
-            self.sio_client = socketio.Client(reconnection=False)
+        self.config = config
 
-        self.desk_height_sitting = desk_height_sitting
-        self.desk_height_standing = desk_height_standing
-
-        self.min_bits = min_bits
-
-        self.height = desk_height_sitting
+        self.height = self.config.desk_height_sitting
         self.state = common.STATE_SITTING
 
-        self.client = BleakClient(controller_mac)
+        self.client = BleakClient(self.config.controller_mac)
 
-        self.pubsub = PubSub(twitch, callback_loop=asyncio.get_running_loop())
-        self.broadcaster_id = broadcaster_id
+        if self.config.display_server_enabled:
+            self.sio_client = socketio.Client(reconnection=False)
 
-        self.pending_events = set()
+        self.twitch = None
+        self.broadcaster_id = None
+        self.desk_up_reward_id = None
+        self.desk_down_reward_id = None
+        self.pubsub = None
 
         # ensure graceful shutdown is handled on SIGINT and SIGTERM signals (only works for linux)
         try:
@@ -91,9 +78,10 @@ class DeskController:
         """Gracefully shut down the controller."""
         del frame
         LOG.info("received signal %s", signum)
-        LOG.info("stopping pubsub...")
-        self.pubsub.stop()
-        if self.display_server_url is not None:
+        if self.pubsub:
+            LOG.info("stopping pubsub...")
+            self.pubsub.stop()
+        if self.config.display_server_enabled:
             LOG.info("disconnecting from display server...")
             self.sio_client.disconnect()
         LOG.info("controller shutting down")
@@ -119,11 +107,11 @@ class DeskController:
         elif height_new < self.height:
             # If height is decreasing the desk is moving down.
             self.state = common.STATE_GOING_DOWN
-        elif height_new > self.desk_height_standing - 2:
+        elif height_new > self.config.desk_height_standing - 2:
             # If the desk is not changing height and close to standing position, assume we are
             # standing.
             self.state = common.STATE_STANDING
-        elif height_new < self.desk_height_sitting + 2:
+        elif height_new < self.config.desk_height_sitting + 2:
             # If the desk is not changing height and close to sitting position, assume we are
             # sitting.
             self.state = common.STATE_SITTING
@@ -134,10 +122,15 @@ class DeskController:
 
         self.height = height_new
         LOG.debug("state=%s", self.state)
-        if self.display_server_url is not None:
+        if self.config.display_server_enabled:
             self.display_height()
 
-    async def callback_bits(self, uuid, data: dict) -> None:
+    async def callback_bits(self, uuid: UUID, data: dict[str, Any]) -> None:
+        """Callback for bit redemptions that moves desk according to the message.
+
+        :param uuid: uuid of the pubsub message
+        :param data: data of the pubsub message
+        """
         del uuid
         bits_used = data["data"]["bits_used"]
         chat_message = data["data"]["chat_message"]
@@ -145,7 +138,7 @@ class DeskController:
         if not user:
             user = "anonymous"
 
-        if bits_used < self.min_bits:
+        if bits_used < self.config.min_bits:
             LOG.info("Not enough bits to move desk")
             return
 
@@ -168,8 +161,12 @@ class DeskController:
         else:
             LOG.info("No desk command found in bits message")
 
+    async def callback_channel_points(self, uuid: UUID, data: dict[str, Any]) -> None:
+        """Callback for channel point redemptions that moves desk according to the reward redeemed.
 
-    async def callback_channel_points(self, uuid, data: dict) -> None:
+        :param uuid: uuid of the pubsub message
+        :param data: data of the pubsub message
+        """
         del uuid
         reward_id = data["data"]["redemption"]["reward"]["id"]
         redemption_id = data["data"]["redemption"]["id"]
@@ -179,7 +176,6 @@ class DeskController:
             await self.handle_desk_up_reward(redemption_id, user)
         if reward_id == self.desk_down_reward_id:
             await self.handle_desk_down_reward(redemption_id, user)
-
 
     async def move_desk_up(self) -> None:
         """Sends commands to the desk to move it to the standing position."""
@@ -218,7 +214,7 @@ class DeskController:
         except socketio.client.exceptions.SocketIOError:
             LOG.error("failed to connect to display server, attempting to reconnect...")
             try:
-                self.sio_client.connect(self.display_server_url)
+                self.sio_client.connect(self.config.display_server_url)
                 LOG.info("reconnected to display server")
             except socketio.client.exceptions.SocketIOError as exp:
                 LOG.error("failed to reconnect: %s", exp)
@@ -230,7 +226,7 @@ class DeskController:
         :param user: name of the user claiming the redemption
         :raises BTBaseException: when there is an issue communicating with the desk
         """
-
+        assert self.desk_up_reward_id is not None
         if self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
             LOG.info("refunding %s (desk moving up or standing already)", user)
             await self.twitch.update_redemption_status(
@@ -257,7 +253,7 @@ class DeskController:
         :param user: name of the user claiming the redemption
         :raises BTBaseException: when there is an issue communicating with the desk
         """
-
+        assert self.desk_down_reward_id is not None
         if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
             LOG.info("refunding %s (desk moving down or sitting already)", user)
             await self.twitch.update_redemption_status(
@@ -277,43 +273,87 @@ class DeskController:
             CustomRewardRedemptionStatus.FULFILLED,
         )
 
+    async def configure_twitch(self) -> None:
+        """Configures connection to the twitch API and sets up event listeners."""
+
+        LOG.info("configuring twitch authentication...")
+        self.twitch = await Twitch(self.config.client_id, self.config.client_secret)
+        assert self.twitch is not None
+        await self.twitch.authenticate_app([])
+        target_scope = common.get_target_scope(
+            self.config.channel_points_enabled, self.config.bits_enabled
+        )
+
+        await self.twitch.set_user_authentication(
+            self.config.auth_token, target_scope, self.config.refresh_token
+        )
+        broadcaster = await first(self.twitch.get_users(logins=[self.config.broadcaster_name]))
+        assert broadcaster is not None
+        self.broadcaster_id = broadcaster.id
+
+        self.pubsub = PubSub(self.twitch, callback_loop=asyncio.get_running_loop())
+        assert self.pubsub is not None
+        self.pubsub.start()
+
+        if self.config.channel_points_enabled:
+            LOG.info("checking channel points rewards...")
+            assert self.config.desk_up_reward_name is not None
+            assert self.config.desk_down_reward_name is not None
+            assert self.broadcaster_id is not None
+            self.desk_up_reward_id, self.desk_down_reward_id = await common.set_up_channel_points(
+                self.twitch,
+                self.broadcaster_id,
+                self.config.desk_up_reward_name,
+                self.config.desk_down_reward_name,
+            )
+            LOG.info("listening for channel points...")
+            await self.pubsub.listen_channel_points(
+                self.broadcaster_id, self.callback_channel_points
+            )
+
+
+        if self.config.bits_enabled:
+            LOG.info("listening for bits...")
+            await self.pubsub.listen_bits(self.broadcaster_id, self.callback_bits)
+
     async def run(self) -> None:
-        """Run the polling loop."""
+        """Run the desk controller."""
         # connect to the desk via bluetooth
-        LOG.info("connecting to desk bluetooth controller at %s...", self.controller_mac)
+        LOG.info("connecting to desk bluetooth controller at %s...", self.config.controller_mac)
         try:
             await self.client.connect()
             # start notifier for desk heigh updates
             await self.client.start_notify(common.DESK_HEIGHT_READ_UUID, self.on_notification)
-            # test moving the desk to sitting position
+            # ensure desk is in sitting position
+            LOG.info("ensuring desk is in sitting position...")
             await self.move_desk_down()
         except BleakError as exp:
             LOG.error("failed to connect to desk via bluetooth: %s", exp)
             raise FatalException from exp
 
-        if self.display_server_url is not None:
+        try:
+            # configure twitch api connectivity
+            await self.configure_twitch()
+        except TwitchAPIException as exp:
+            LOG.error("failed to configure twitch api connectivity: %s", exp)
+            raise FatalException from exp
+
+        if self.config.display_server_enabled:
             # connect to the display server
-            LOG.info("connecting to display server at %s...", self.display_server_url)
+            LOG.info("connecting to display server at %s...", self.config.display_server_url)
             try:
-                self.sio_client.connect(self.display_server_url)
+                self.sio_client.connect(self.config.display_server_url)
             except socketio.client.exceptions.SocketIOError as exp:
-                LOG.error("failed to connect to display server at %s: %s", self.display_server_url, exp)
+                LOG.error(
+                    "failed to connect to display server at %s: %s",
+                    self.config.display_server_url,
+                    exp,
+                )
                 raise FatalException from exp
 
-        self.pubsub.start()
-
-        # listen for channel points
-        if self.desk_up_reward_id is not None:
-            await self.pubsub.listen_channel_points(self.broadcaster_id, self.callback_channel_points)
-
-        # listen for bits
-        if self.min_bits is not None:
-            await self.pubsub.listen_bits(self.broadcaster_id, self.callback_bits)
-
-        # run the polling loop
-        LOG.info("Listening for twitch channel points and/or bits events")
+        LOG.info("finished starting controller")
         while True:
-            LOG.debug("polling twitch api")
-            if self.display_server_url is not None:
+            LOG.debug("controller is running")
+            if self.config.display_server_enabled:
                 self.display_height()
             await asyncio.sleep(POLL_INTERVAL)

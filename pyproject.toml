@@ -43,3 +43,7 @@ max-attributes = 10
 [[tool.mypy.overrides]]
 module = "socketio"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pwinput"
+ignore_missing_imports = true
