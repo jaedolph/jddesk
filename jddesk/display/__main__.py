@@ -1,5 +1,9 @@
 """Sets up a webserver to display the desk height."""
 import logging
+
+# required to import gevent for pyinstall to work
+from engineio.async_drivers import gevent  # type: ignore # pylint: disable=unused-import
+
 from jddesk.display import web
 
 

@@ -311,7 +311,6 @@ class DeskController:
                 self.broadcaster_id, self.callback_channel_points
             )
 
-
         if self.config.bits_enabled:
             LOG.info("listening for bits...")
             await self.pubsub.listen_bits(self.broadcaster_id, self.callback_bits)

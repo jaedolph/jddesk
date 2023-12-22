@@ -1,0 +1,25 @@
+on: push
+
+jobs:
+  build:
+    runs-on: 'windows-latest'
+
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-python@v2
+      with:
+        python-version: 3.11
+
+    - run: pip install . pyinstaller
+    - run: |
+        pyinstaller --console --collect-all jddesk --name jddesk .\jddesk\__main__.py
+        pyinstaller --console --name setup_config .\jddesk\setup_config.py
+        pyinstaller --console --name display_server .\jddesk\display\__main__.py
+        copy .\dist\setup_config\setup_config.exe .\dist\jddesk
+        copy .\dist\display_server\display_server.exe .\dist\jddesk
+        cd .\dist
+        powershell "Compress-Archive jddesk\ jddesk.zip"
+        
+    - uses: actions/upload-artifact@v2
+      with:
+        path: dist/jddesk.zip
