@@ -89,7 +89,7 @@ async def configure_desk_controller(config: DeskConfig) -> DeskConfig:
     connection_ok = False
     while not connection_ok:
         config.controller_mac = input(
-            "Enter the MAC address below the QR code (e.g. F8:30:02:33:53:09): "
+            "Enter the MAC address below the QR code (e.g. 01:02:03:04:05:06): "
         )
         print("Testing connection to the desk...")
         try:
