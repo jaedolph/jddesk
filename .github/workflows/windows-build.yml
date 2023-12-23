@@ -10,13 +10,10 @@ jobs:
       with:
         python-version: 3.11
 
-    - run: pip install . pyinstaller
+    - run: pip install . nuitka
     - run: |
-        pyinstaller --console --clean --collect-data jddesk.display --name jddesk .\jddesk\__main__.py
-        pyinstaller --console --clean --name setup_config .\jddesk\setup_config.py
-        pyinstaller --console --clean --name display_server .\jddesk\display\__main__.py
-        copy .\dist\setup_config\setup_config.exe .\dist\jddesk
-        copy .\dist\display_server\display_server.exe .\dist\jddesk
+        nuitka --standalone --output-dir=dist/jddesk --include-package-data=jddesk -o jddesk.exe --remove-output --assume-yes-for-downloads .\jddesk\__main__.py
+        copy .\windows\* .\dist\jddesk
     - uses: actions/upload-artifact@v3
       with:
         name: jddesk

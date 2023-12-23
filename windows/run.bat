@@ -1,0 +1,1 @@
+start "jddesk controller" __main__.dist/jddesk.exe --config-file jddesk.ini
