@@ -2,6 +2,7 @@
 
 import configparser
 import re
+import os
 
 
 class DeskConfigError(Exception):
@@ -28,6 +29,9 @@ class DeskConfig:
 
     def load_config(self) -> None:
         """Creates sections so new config can be created."""
+        if not os.path.isfile(self.config_file_path):
+            raise DeskConfigError(f'could not open config file "{self.config_file_path}"')
+
         self.config.read(self.config_file_path)
         self.validate_config()
 
@@ -66,7 +70,7 @@ class DeskConfig:
         try:
             assert isinstance(self.display_server_enabled, bool)
             if self.display_server_enabled:
-                assert isinstance(self.display_server_url, str)
+                assert isinstance(self.display_server_address, str)
         except (configparser.Error, AssertionError, ValueError, KeyError) as exp:
             raise DeskConfigError(exp) from exp
 
@@ -216,11 +220,11 @@ class DeskConfig:
         self.config["DISPLAY_SERVER"]["ENABLED"] = "yes" if value else "no"
 
     @property
-    def display_server_url(self) -> str:
-        return self.config["DISPLAY_SERVER"]["URL"]
+    def display_server_address(self) -> str:
+        return self.config["DISPLAY_SERVER"]["ADDRESS"]
 
-    @display_server_url.setter
-    def display_server_url(self, value: str) -> None:
-        self.config["DISPLAY_SERVER"]["URL"] = value
+    @display_server_address.setter
+    def display_server_address(self, value: str) -> None:
+        self.config["DISPLAY_SERVER"]["ADDRESS"] = value
 
     # pylint: disable=

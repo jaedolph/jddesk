@@ -2,6 +2,7 @@
 
 import sys
 import os
+import pathlib
 from twitchAPI.twitch import Twitch
 from twitchAPI.type import AuthScope
 
@@ -30,7 +31,8 @@ DESK_UP_BITS_COMMAND = "!deskstand"
 DESK_DOWN_BITS_COMMAND = "!desksit"
 DESK_GENERIC_BITS_COMMAND = "!desk"
 
-CONFIG_FILE_NAME = "jddesk.ini"
+DEFAULT_CONFIG_FILE_NAME = "jddesk.ini"
+DEFAULT_CONFIG_FILE_PATH = str(pathlib.Path.home() / DEFAULT_CONFIG_FILE_NAME)
 
 DESK_DOWN_CHANNEL_POINTS_COST = 1000
 DESK_UP_CHANNEL_POINTS_COST = 1000

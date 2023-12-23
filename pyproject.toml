@@ -8,8 +8,6 @@ authors = [
 ]
 dependencies = [
     "flask",
-    "gevent",
-    "gevent-websocket",
     "requests",
     "flask_socketio",
     "python-socketio[client]",
@@ -19,8 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-jddesk-controller = "jddesk.__main__:main"
-jddesk-display = "jddesk.display.__main__:main"
+jddesk = "jddesk.__main__:main"
 
 [build-system]
 requires = ["setuptools"]

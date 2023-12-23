@@ -60,6 +60,7 @@ class DeskController:
         if self.config.display_server_enabled:
             self.sio_client = socketio.Client(reconnection=False)
 
+        self.running = False
         self.twitch = None
         self.broadcaster_id = None
         self.desk_up_reward_id = None
@@ -78,10 +79,12 @@ class DeskController:
     def exit_gracefully(self, signum: int, frame: Optional[FrameType]) -> None:
         """Gracefully shut down the controller."""
         del frame
+        self.running = False
         LOG.info("received signal %s", signum)
         if self.pubsub:
             LOG.info("stopping pubsub...")
             self.pubsub.stop()
+            self.pubsub = None
         if self.config.display_server_enabled:
             LOG.info("disconnecting from display server...")
             self.sio_client.disconnect()
@@ -213,7 +216,7 @@ class DeskController:
     async def reconnect_display_server(self) -> None:
         """Attempts to recconect to the display server."""
         try:
-            self.sio_client.connect(self.config.display_server_url)
+            self.sio_client.connect("http://" + self.config.display_server_address)
             LOG.info("reconnected to display server")
         except socketio.client.exceptions.SocketIOError as exp:
             LOG.error("failed to reconnect: %s", exp)
@@ -351,15 +354,18 @@ class DeskController:
     async def run(self) -> None:
         """Run the desk controller."""
 
+        self.running = True
         if self.config.display_server_enabled:
             # connect to the display server
-            LOG.info("connecting to display server at %s...", self.config.display_server_url)
+            LOG.info(
+                "connecting to display server at http://%s...", self.config.display_server_address
+            )
             try:
-                self.sio_client.connect(self.config.display_server_url)
+                self.sio_client.connect("http://" + self.config.display_server_address)
             except socketio.client.exceptions.SocketIOError as exp:
                 LOG.error(
                     "failed to connect to display server at %s: %s",
-                    self.config.display_server_url,
+                    self.config.display_server_address,
                     exp,
                 )
                 raise FatalException from exp
@@ -385,7 +391,7 @@ class DeskController:
             raise FatalException from exp
 
         LOG.info("finished starting controller")
-        while True:
+        while self.running:
             LOG.debug("controller is running")
             if self.config.display_server_enabled:
                 if self.reconnect_display_server_required:

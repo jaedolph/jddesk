@@ -1,8 +1,6 @@
 """Helper program to write config file."""
 
 import asyncio
-import pathlib
-import traceback
 
 from pwinput import pwinput
 from bleak import BleakClient
@@ -289,15 +287,15 @@ def configure_display_server(config: DeskConfig) -> DeskConfig:
         "browser source? (yes/no): "
     )
     if config.display_server_enabled:
-        config.display_server_url = "http://localhost:5000"
+        config.display_server_address = "localhost:5000"
 
     return config
 
 
 # pylint: disable=too-many-statements,too-many-branches
-async def main() -> None:
+async def configure(config_file_path: str) -> None:
     """Utility that prompts user for settings to configure the desk controller."""
-    config_file_path = str(pathlib.Path.home() / common.CONFIG_FILE_NAME)
+
     desk_config = DeskConfig(config_file_path)
     desk_config.new_config()
 
@@ -393,12 +391,3 @@ async def main() -> None:
 
 
 # pylint: disable=
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as exp:  # pylint: disable=broad-exception-caught
-        traceback.print_tb(exp.__traceback__)
-        print(f"Fatal exception occurred: {exp}")
-        common.custom_exit(1)
-    common.custom_exit(0)
