@@ -22,7 +22,7 @@ jobs:
         powershell Compress-Archive jddesk jddesk-windows-amd64.zip
     - name: Upload release artifiacts
       run: |
-        gh release upload ${{github.event.release.tag_name}} dist\jddesk-${{github.ref_name }}-windows-amd64.zip
+        gh release upload ${{github.event.release.tag_name}} dist/jddesk-${{github.ref_name }}-windows-amd64.zip
       env:
         GITHUB_TOKEN: ${{ github.TOKEN }}
       shell: bash
