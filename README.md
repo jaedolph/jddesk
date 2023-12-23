@@ -47,6 +47,7 @@ Bits do not get refunded if the desk does not move (I don't think this is possib
 Installation has been tested on Fedora 38 using python 3.11 but should work on other Linux distributions.
 ```bash
 python3 -m pip install . --user
+jddesk --configure
 ```
 
 ## Install on Windows
