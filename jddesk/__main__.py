@@ -35,7 +35,8 @@ def load_config(config_file_path: str) -> DeskConfig:
 async def run_controller(config: DeskConfig) -> None:
     """Initializes and runs the desk controller.
 
-    :param config: DeskConfig object containing the configuration"""
+    :param config: DeskConfig object containing the configuration
+    """
 
     desk_controller = desk.DeskController(config)
 
@@ -49,7 +50,8 @@ async def run_controller(config: DeskConfig) -> None:
 def run_display_server(config: DeskConfig) -> None:
     """Start the display server.
 
-    :param config: DeskConfig object containing the configuration"""
+    :param config: DeskConfig object containing the configuration
+    """
 
     LOG.info("starting display server")
     host, port = config.display_server_address.split(":")
