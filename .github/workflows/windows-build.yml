@@ -16,5 +16,5 @@ jobs:
         copy .\windows\* .\dist\jddesk
     - uses: actions/upload-artifact@v3
       with:
-        name: jddesk
+        name: jddesk-windows
         path: dist/jddesk

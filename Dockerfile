@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir .
 
 USER 1001
 
-CMD ["jddesk-controller"]
+CMD ["jddesk"]
