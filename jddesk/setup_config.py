@@ -1,6 +1,7 @@
 """Helper program to write config file."""
 
 import asyncio
+from typing import Optional
 
 from pwinput import pwinput
 from bleak import BleakClient
@@ -26,6 +27,8 @@ class DeskHeightTester:
         self.desk_min_height = 200.0
         self.desk_height = 0.0
         self.client = BleakClient(mac_address)
+        self.data_out_uuid: Optional[str] = None
+        self.data_in_uuid: Optional[str] = None
 
     def on_notification(self, sender: BleakGATTCharacteristic, data: bytes) -> None:
         """Keep track of the desk height in realtime by listening for GATT notifications.
@@ -37,30 +40,68 @@ class DeskHeightTester:
         """
         del sender
         self.desk_height = common.get_height_in_cm(data)
-        if self.desk_height > self.desk_max_height:
-            self.desk_max_height = self.desk_height
-        if self.desk_height < self.desk_min_height:
-            self.desk_min_height = self.desk_height
+        self.desk_max_height = max(self.desk_max_height, self.desk_height)
+        self.desk_min_height = min(self.desk_min_height, self.desk_height)
 
     async def calibrate_height(self) -> tuple[float, float]:
         """Determines the sitting and standing heights of the desk by moving it up and down.
 
         :return: maximum and minimum heights the desk moved to during the test
         """
-        await self.client.start_notify(common.DESK_HEIGHT_READ_UUID, self.on_notification)
+        assert self.data_out_uuid is not None
+        assert self.data_in_uuid is not None
+
+        await self.client.start_notify(self.data_out_uuid, self.on_notification)
         await asyncio.sleep(0)
         print("Moving desk to standing position...")
-        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
+        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_UP_GATT_CMD)
+        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_UP_GATT_CMD)
         await asyncio.sleep(14)
         print("Moving desk to sitting position...")
-        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_STOP_GATT_CMD)
+        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(common.DESK_HEIGHT_WRITE_UUID, common.DESK_DOWN_GATT_CMD)
+        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_DOWN_GATT_CMD)
         await asyncio.sleep(14)
 
         return self.desk_max_height, self.desk_min_height
+
+    async def get_services(self) -> None:
+        """Scans which services are available for the desk and finds the UUID of 'Data In' and 'Data
+        Out' characteristics."""
+
+        for service in self.client.services:
+            print("[Service] {service}", service)
+
+            for char in service.characteristics:
+                if "read" in char.properties:
+                    try:
+                        value = await self.client.read_gatt_char(char.uuid)
+                        extra = f", Value: {value}"
+                    except BleakError as exp:
+                        extra = f", Error: {exp}"
+                else:
+                    extra = ""
+
+                if "write-without-response" in char.properties:
+                    extra += f", Max write w/o rsp size: {char.max_write_without_response_size}"
+
+                print(
+                    f"  [Characteristic] {char} ({','.join(char.properties)}){extra}",
+                )
+
+                for descriptor in char.descriptors:
+                    try:
+                        value = await self.client.read_gatt_descriptor(descriptor.handle)
+                        if value == b"Data Out":
+                            print("  found 'Data Out' characteristic")
+                            self.data_out_uuid = char.uuid
+                        if value == b"Data In":
+                            print("  found 'Data In' characteristic")
+                            self.data_in_uuid = char.uuid
+                        print(f"    [Descriptor] {descriptor}, Value: {value}")
+                    except BleakError as exp:
+                        print(f"    [Descriptor] {descriptor}, Error: {exp}")
 
 
 def input_bool(prompt: str) -> bool:
@@ -96,8 +137,16 @@ async def configure_desk_controller(config: DeskConfig) -> DeskConfig:
             tester = DeskHeightTester(config.controller_mac)
             await tester.client.connect()
             connection_ok = tester.client.is_connected
-        except BleakError as exception:
+            await tester.get_services()
+            if tester.data_out_uuid is None:
+                raise ValueError("Could not find 'Data Out' characteristic")
+            if tester.data_in_uuid is None:
+                raise ValueError("Could not find 'Data In' characteristic")
+        except (BleakError, ValueError) as exception:
             print(f"\nERROR: {exception}\n")
+
+    config.data_out_uuid = str(tester.data_out_uuid)
+    config.data_in_uuid = str(tester.data_in_uuid)
 
     print("Connection OK")
     print("\n" * 5)

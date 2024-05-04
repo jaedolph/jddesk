@@ -40,6 +40,8 @@ class DeskConfig:
         try:
             assert self.config.has_section("DESK")
             assert self.is_mac_address(self.controller_mac)
+            assert isinstance(self.data_in_uuid, str)
+            assert isinstance(self.data_out_uuid, str)
             assert isinstance(self.desk_height_sitting, float)
             assert isinstance(self.desk_height_standing, float)
         except (configparser.Error, AssertionError, ValueError, KeyError) as exp:
@@ -112,6 +114,22 @@ class DeskConfig:
     @controller_mac.setter
     def controller_mac(self, value: str) -> None:
         self.config["DESK"]["CONTROLLER_MAC"] = value
+
+    @property
+    def data_in_uuid(self) -> str:
+        return self.config["DESK"]["DATA_IN_UUID"]
+
+    @data_in_uuid.setter
+    def data_in_uuid(self, value: str) -> None:
+        self.config["DESK"]["DATA_IN_UUID"] = value
+
+    @property
+    def data_out_uuid(self) -> str:
+        return self.config["DESK"]["DATA_OUT_UUID"]
+
+    @data_out_uuid.setter
+    def data_out_uuid(self, value: str) -> None:
+        self.config["DESK"]["DATA_OUT_UUID"] = value
 
     @property
     def desk_height_standing(self) -> float:

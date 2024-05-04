@@ -92,6 +92,8 @@ jddesk --configure
 controller_mac = 01:02:03:04:05:06 # mac address of the bluetooth controller
 standing_height = 122.9 # desk standing height in centimeters
 sitting_height = 76.4 # desk sitting height in centimeters
+data_out_uuid = 0000ff02-0000-1000-8000-00805f9b34fb # UUID of the BLE characteristic used to receive data from the desk controller
+data_in_uuid = 0000ff01-0000-1000-8000-00805f9b34fb # UUID of the BLE characteristic used to send data to the desk controller
 
 [TWITCH]
 # oauth configuration (it is recommended to run `jddesk --configure` to create these)

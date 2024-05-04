@@ -1,4 +1,5 @@
 """Main entrypoints for the program."""
+
 import logging
 import asyncio
 import argparse
