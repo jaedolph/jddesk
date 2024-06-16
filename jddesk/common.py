@@ -13,6 +13,12 @@ DESK_UP_GATT_CMD = b"\xF1\xF1\x06\x00\x06\x7E"  # command will move desk to heig
 DESK_DOWN_GATT_CMD = b"\xF1\xF1\x05\x00\x05\x7E"  # command will move desk to height preset 1
 DESK_STOP_GATT_CMD = b"\xF1\xF1\x2b\x00\x2b\x7E"  # command will stop the desk from moving
 
+# UUIDs found for BLE characteristics for OMNIDESK and UPLIFT Desk
+OMNIDESK_DATA_IN_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
+OMNIDESK_DATA_OUT_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
+UPLIFT_DESK_DATA_IN_UUID = "0000fe61-0000-1000-8000-00805f9b34fb"
+UPLIFT_DESK_DATA_OUT_UUID = "0000fe62-0000-1000-8000-00805f9b34fb"
+
 # states for comparison
 STATE_GOING_UP = "GOING UP"
 STATE_GOING_DOWN = "GOING DOWN"

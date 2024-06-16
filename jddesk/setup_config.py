@@ -90,15 +90,16 @@ class DeskHeightTester:
                     f"  [Characteristic] {char} ({','.join(char.properties)}){extra}",
                 )
 
+                if char.uuid in (common.OMNIDESK_DATA_OUT_UUID, common.UPLIFT_DESK_DATA_OUT_UUID):
+                    print("  found 'Data Out' characteristic")
+                    self.data_out_uuid = char.uuid
+                if char.uuid in (common.OMNIDESK_DATA_IN_UUID, common.UPLIFT_DESK_DATA_IN_UUID):
+                    print("  found 'Data In' characteristic")
+                    self.data_in_uuid = char.uuid
+
                 for descriptor in char.descriptors:
                     try:
                         value = await self.client.read_gatt_descriptor(descriptor.handle)
-                        if value == b"Data Out":
-                            print("  found 'Data Out' characteristic")
-                            self.data_out_uuid = char.uuid
-                        if value == b"Data In":
-                            print("  found 'Data In' characteristic")
-                            self.data_in_uuid = char.uuid
                         print(f"    [Descriptor] {descriptor}, Value: {value}")
                     except BleakError as exp:
                         print(f"    [Descriptor] {descriptor}, Error: {exp}")
