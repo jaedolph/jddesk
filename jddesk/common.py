@@ -59,6 +59,46 @@ def get_height_in_cm(data: bytes) -> float:
     return height
 
 
+def get_height_in_bytes(height: float) -> bytes:
+    """Takes height in cm and converts to a 2 byte height representation (in mm).
+
+    :param height: height in cm
+    :returns: 2 byte height representation that can be sent to the controller
+    """
+
+    height_mm = int(height * 10)
+
+    height_bytes = height_mm.to_bytes(2, "big")
+
+    return height_bytes
+
+
+def get_checksum(value: bytes) -> bytes:
+    """Compute 8 bit modulo 256 checksum of hex string.
+
+    :param value: hex value to get checksum of
+    :return: binary checksum
+    """
+
+    return (sum(value) % 256).to_bytes(1, "big")
+
+
+def get_height_set_command(height: float) -> bytes:
+    """Get the command that can be sent to set the desk to a particular height.
+
+    :param height: height to set the desk to in cm
+    :return: the bytes to send to the desk controller to set the height
+    """
+
+    height_in_bytes = get_height_in_bytes(height)
+    set_height_command = b"\x1b\x02" + height_in_bytes
+    checksum = get_checksum(set_height_command)
+
+    command = b"\xF1\xF1" + set_height_command + checksum + b"\x7E"
+
+    return command
+
+
 async def set_up_channel_points(
     twitch: Twitch, broadcaster_id: str, desk_up_reward_name: str, desk_down_reward_name: str
 ) -> tuple[str, str]:

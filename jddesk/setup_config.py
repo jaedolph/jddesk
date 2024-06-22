@@ -23,9 +23,6 @@ class DeskHeightTester:
     """
 
     def __init__(self, mac_address: str) -> None:
-        self.desk_max_height = 0.0
-        self.desk_min_height = 200.0
-        self.desk_height = 0.0
         self.client = BleakClient(mac_address)
         self.data_out_uuid: Optional[str] = None
         self.data_in_uuid: Optional[str] = None
@@ -33,38 +30,33 @@ class DeskHeightTester:
     def on_notification(self, sender: BleakGATTCharacteristic, data: bytes) -> None:
         """Keep track of the desk height in realtime by listening for GATT notifications.
 
-        We can use this to find the desk maximum and minimum heights.
-
         :param sender: GATT characteristic of the notification
         :param data: data in the notification
         """
         del sender
-        self.desk_height = common.get_height_in_cm(data)
-        self.desk_max_height = max(self.desk_max_height, self.desk_height)
-        self.desk_min_height = min(self.desk_min_height, self.desk_height)
+        desk_height = common.get_height_in_cm(data)
+        print(f"Desk height is {desk_height}")
 
-    async def calibrate_height(self) -> tuple[float, float]:
-        """Determines the sitting and standing heights of the desk by moving it up and down.
+    async def test_move_desk(self, height: float, notify: bool = True) -> None:
+        """Test moving the desk to a specific height.
 
-        :return: maximum and minimum heights the desk moved to during the test
+        :param height: height to move the desk to
+        :param notify: set to True if you want the height to be displayed during the test
         """
         assert self.data_out_uuid is not None
         assert self.data_in_uuid is not None
 
-        await self.client.start_notify(self.data_out_uuid, self.on_notification)
-        await asyncio.sleep(0)
-        print("Moving desk to standing position...")
-        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_STOP_GATT_CMD)
-        await asyncio.sleep(1)
-        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_UP_GATT_CMD)
-        await asyncio.sleep(14)
-        print("Moving desk to sitting position...")
-        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_STOP_GATT_CMD)
-        await asyncio.sleep(1)
-        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_DOWN_GATT_CMD)
-        await asyncio.sleep(14)
+        if notify:
+            await self.client.start_notify(self.data_out_uuid, self.on_notification)
+            await asyncio.sleep(1)
 
-        return self.desk_max_height, self.desk_min_height
+        print(f"Moving desk to {height}cm...")
+        await self.client.write_gatt_char(self.data_in_uuid, common.DESK_STOP_GATT_CMD)
+        await asyncio.sleep(1)
+        await self.client.write_gatt_char(self.data_in_uuid, common.get_height_set_command(height))
+        for num in range(15, 0, -1):
+            print(f"waiting ({num}s remaining)")
+            await asyncio.sleep(1)
 
     async def get_services(self) -> None:
         """Scans which services are available for the desk and finds the UUID of 'Data In' and 'Data
@@ -126,6 +118,24 @@ def input_bool(prompt: str) -> bool:
     return return_val
 
 
+def input_float(prompt: str) -> bool:
+    """Wrapper around the input function that can be used a float value. Repeats the prompt until a
+    float value is given.
+
+    :param prompt: input prompt to show the user
+    :return: the float value
+    """
+    return_val = None
+    while return_val is None:
+        input_string = input(prompt)
+        try:
+            return_val = float(input_string)
+        except ValueError:
+            print("Please enter a valid number")
+
+    return return_val
+
+
 async def configure_desk_controller(config: DeskConfig) -> DeskConfig:
     """Performs a survey to configure desk controller parameters."""
     connection_ok = False
@@ -152,27 +162,30 @@ async def configure_desk_controller(config: DeskConfig) -> DeskConfig:
     print("Connection OK")
     print("\n" * 5)
 
-    print("Set your desk heights using the manual controller")
-    print(
-        "1. Ensure you have set your '1' preset to the sitting height, and the your '2' "
-        "preset set to standing height\n"
-        "2. Press preset '1' to move the desk to the sitting position to prepare for calibration"
+    config.desk_height_sitting = input_float(
+        "\nEnter the sitting height for your desk in cm (e.g. 75.0):"
     )
-    input("\nPress `ENTER` when complete.")
-    print("\n" * 5)
-    print(
-        "⚠⚠⚠⚠⚠ WARNING: Desk will move up and down to calibrate. Do not adjust the desk "
-        "while calibration is in progress. ⚠⚠⚠⚠⚠"
+    config.desk_height_standing = input_float(
+        "\nEnter the standing height for your desk in cm (e.g. 105.2):"
     )
-    input("Press `ENTER` to start calibration.")
-    print("\n" * 5)
-    config.desk_height_standing, config.desk_height_sitting = await tester.calibrate_height()
 
     print("\n" * 5)
-    print(
-        f"Desk standing height detected as {config.desk_height_standing}cm, "
-        f"sitting height detected as {config.desk_height_sitting }cm"
-    )
+    print("⚠⚠⚠⚠⚠ WARNING: Desk will move up and down to test. ⚠⚠⚠⚠⚠")
+    input("Press `ENTER` to start test.")
+    print("\n" * 5)
+    print("Testing moving desk to sitting position (notify disabled)...")
+    await tester.test_move_desk(config.desk_height_sitting, False)
+    print("Testing moving desk to standing position (notify disabled)...")
+    await tester.test_move_desk(config.desk_height_standing, False)
+    print("Testing moving desk to sitting position (notify enabled)...")
+    await tester.test_move_desk(config.desk_height_sitting, True)
+    print("Testing moving desk to standing position (notify enabled)...")
+    await tester.test_move_desk(config.desk_height_standing, True)
+
+    print("Disconnecting")
+    await tester.client.disconnect()
+    print("\n" * 5)
+    print("Desk control testing complete")
     input("\nCalibration complete. Press `ENTER` to continue.")
 
     return config

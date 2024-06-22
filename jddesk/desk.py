@@ -186,7 +186,10 @@ class DeskController:
 
         await self.client.write_gatt_char(self.config.data_in_uuid, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(self.config.data_in_uuid, common.DESK_UP_GATT_CMD)
+        await self.client.write_gatt_char(
+            self.config.data_in_uuid,
+            common.get_height_set_command(self.config.desk_height_standing),
+        )
         self.state = common.STATE_GOING_UP
 
     async def move_desk_down(self) -> None:
@@ -194,7 +197,10 @@ class DeskController:
 
         await self.client.write_gatt_char(self.config.data_in_uuid, common.DESK_STOP_GATT_CMD)
         await asyncio.sleep(1)
-        await self.client.write_gatt_char(self.config.data_in_uuid, common.DESK_DOWN_GATT_CMD)
+        await self.client.write_gatt_char(
+            self.config.data_in_uuid,
+            common.get_height_set_command(self.config.desk_height_sitting),
+        )
         self.state = common.STATE_GOING_DOWN
 
     async def reconnect_bluetooth(self) -> None:
@@ -376,6 +382,7 @@ class DeskController:
             await self.client.connect()
             # start notifier for desk heigh updates
             await self.client.start_notify(self.config.data_out_uuid, self.on_notification)
+            await asyncio.sleep(1)
             # ensure desk is in sitting position
             LOG.info("ensuring desk is in sitting position...")
             await self.move_desk_down()
