@@ -168,19 +168,19 @@ async def configure_desk_controller(config: DeskConfig) -> DeskConfig:
     config.desk_height_standing = input_float(
         "\nEnter the standing height for your desk in cm (e.g. 105.2):"
     )
+    config.desk_height_detection_enabled = input_bool(
+        "\nWould you like to enable height detection? (yes/no)"
+        "\nNOTE: currently this does not work for the UPLIFT desk: "
+    )
 
     print("\n" * 5)
     print("⚠⚠⚠⚠⚠ WARNING: Desk will move up and down to test. ⚠⚠⚠⚠⚠")
     input("Press `ENTER` to start test.")
     print("\n" * 5)
-    print("Testing moving desk to sitting position (notify disabled)...")
-    await tester.test_move_desk(config.desk_height_sitting, False)
-    print("Testing moving desk to standing position (notify disabled)...")
-    await tester.test_move_desk(config.desk_height_standing, False)
-    print("Testing moving desk to sitting position (notify enabled)...")
-    await tester.test_move_desk(config.desk_height_sitting, True)
-    print("Testing moving desk to standing position (notify enabled)...")
-    await tester.test_move_desk(config.desk_height_standing, True)
+    print("Testing moving desk to standing position...")
+    await tester.test_move_desk(config.desk_height_standing, config.desk_height_detection_enabled)
+    print("Testing moving desk to sitting position...")
+    await tester.test_move_desk(config.desk_height_sitting, config.desk_height_detection_enabled)
 
     print("Disconnecting")
     await tester.client.disconnect()
@@ -430,22 +430,24 @@ async def configure(config_file_path: str) -> None:
             print(f"\nERROR: invalid config {exception}\n")
             twitch_config_valid = False
 
-    print("\n" * 5)
-    print("DISPLAY SERVER SETUP")
-    print("\n--------------------------")
-    display_server_config_valid = False
-    if config_valid:
-        display_server_config_valid = not input_bool(
-            "Display server configuration is valid, would you like to update it? (yes/no): "
-        )
-    while not display_server_config_valid:
-        desk_config = configure_display_server(desk_config)
-        try:
-            desk_config.validate_display_server_section()
-            display_server_config_valid = True
-        except DeskConfigError as exception:
-            print(f"\nERROR: invalid config {exception}\n")
-            display_server_config_valid = False
+    # the display server will only work if height detection is enabled
+    if desk_config.desk_height_detection_enabled:
+        print("\n" * 5)
+        print("DISPLAY SERVER SETUP")
+        print("\n--------------------------")
+        display_server_config_valid = False
+        if config_valid:
+            display_server_config_valid = not input_bool(
+                "Display server configuration is valid, would you like to update it? (yes/no): "
+            )
+        while not display_server_config_valid:
+            desk_config = configure_display_server(desk_config)
+            try:
+                desk_config.validate_display_server_section()
+                display_server_config_valid = True
+            except DeskConfigError as exception:
+                print(f"\nERROR: invalid config {exception}\n")
+                display_server_config_valid = False
 
     print("\n" * 5)
     print(f"Writing config file to {desk_config.config_file_path}...")

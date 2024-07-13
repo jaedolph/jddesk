@@ -44,6 +44,7 @@ class DeskConfig:
             assert isinstance(self.data_out_uuid, str)
             assert isinstance(self.desk_height_sitting, float)
             assert isinstance(self.desk_height_standing, float)
+            assert isinstance(self.desk_height_detection_enabled, bool)
         except (configparser.Error, AssertionError, ValueError, KeyError) as exp:
             raise DeskConfigError(exp) from exp
 
@@ -148,6 +149,14 @@ class DeskConfig:
     def desk_height_sitting(self, value: float) -> None:
         assert isinstance(value, float)
         self.config["DESK"]["SITTING_HEIGHT"] = str(value)
+
+    @property
+    def desk_height_detection_enabled(self) -> bool:
+        return self.config.getboolean("DESK", "ENABLE_HEIGHT_DETECTION")
+
+    @desk_height_detection_enabled.setter
+    def desk_height_detection_enabled(self, value: bool) -> None:
+        self.config["DESK"]["ENABLE_HEIGHT_DETECTION"] = "yes" if value else "no"
 
     @property
     def auth_token(self) -> str:

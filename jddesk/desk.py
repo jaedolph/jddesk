@@ -155,6 +155,7 @@ class DeskController:
             LOG.info("%s is moving desk down", user)
             await self.move_desk_down()
         elif common.DESK_GENERIC_BITS_COMMAND in chat_message.split(" "):
+            # this will only work reliably if height detection is enabled
             LOG.info("%s command found", common.DESK_GENERIC_BITS_COMMAND)
             if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
                 LOG.info("%s is moving desk up", user)
@@ -244,15 +245,17 @@ class DeskController:
         :raises BTBaseException: when there is an issue communicating with the desk
         """
         assert self.desk_up_reward_id is not None
-        if self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
-            LOG.info("refunding %s (desk moving up or standing already)", user)
-            await self.twitch.update_redemption_status(
-                self.broadcaster_id,
-                self.desk_up_reward_id,
-                redemption_id,
-                CustomRewardRedemptionStatus.CANCELED,
-            )
-            return
+        # can only refund points if height detection is enabled
+        if self.config.desk_height_detection_enabled:
+            if self.state in (common.STATE_GOING_UP, common.STATE_STANDING):
+                LOG.info("refunding %s (desk moving up or standing already)", user)
+                await self.twitch.update_redemption_status(
+                    self.broadcaster_id,
+                    self.desk_up_reward_id,
+                    redemption_id,
+                    CustomRewardRedemptionStatus.CANCELED,
+                )
+                return
 
         LOG.info("%s is moving desk up", user)
         try:
@@ -284,15 +287,17 @@ class DeskController:
         :raises BTBaseException: when there is an issue communicating with the desk
         """
         assert self.desk_down_reward_id is not None
-        if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
-            LOG.info("refunding %s (desk moving down or sitting already)", user)
-            await self.twitch.update_redemption_status(
-                self.broadcaster_id,
-                self.desk_down_reward_id,
-                redemption_id,
-                CustomRewardRedemptionStatus.CANCELED,
-            )
-            return
+        # can only refund points if height detection is enabled
+        if self.config.desk_height_detection_enabled:
+            if self.state in (common.STATE_GOING_DOWN, common.STATE_SITTING):
+                LOG.info("refunding %s (desk moving down or sitting already)", user)
+                await self.twitch.update_redemption_status(
+                    self.broadcaster_id,
+                    self.desk_down_reward_id,
+                    redemption_id,
+                    CustomRewardRedemptionStatus.CANCELED,
+                )
+                return
         LOG.info("%s is moving desk down", user)
         try:
             await self.move_desk_down()
@@ -380,8 +385,9 @@ class DeskController:
         LOG.info("connecting to desk bluetooth controller at %s...", self.config.controller_mac)
         try:
             await self.client.connect()
-            # start notifier for desk heigh updates
-            await self.client.start_notify(self.config.data_out_uuid, self.on_notification)
+            if self.config.desk_height_detection_enabled:
+                # start notifier for desk height updates
+                await self.client.start_notify(self.config.data_out_uuid, self.on_notification)
             await asyncio.sleep(1)
             # ensure desk is in sitting position
             LOG.info("ensuring desk is in sitting position...")
