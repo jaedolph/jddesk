@@ -448,6 +448,8 @@ async def configure(config_file_path: str) -> None:
             except DeskConfigError as exception:
                 print(f"\nERROR: invalid config {exception}\n")
                 display_server_config_valid = False
+    else:
+        desk_config.display_server_enabled = False
 
     print("\n" * 5)
     print(f"Writing config file to {desk_config.config_file_path}...")
