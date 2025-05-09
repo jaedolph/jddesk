@@ -3,24 +3,22 @@
 import logging
 import signal
 import sys
-from types import FrameType
-from typing import Any, Optional
 import asyncio
-from uuid import UUID
 
 import socketio
 from bleak import BleakClient
 from bleak.exc import BleakError
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from twitchAPI.twitch import Twitch
-from twitchAPI.pubsub import PubSub
+from twitchAPI.eventsub.websocket import EventSubWebsocket
+from twitchAPI.object.eventsub import ChannelPointsCustomRewardRedemptionAddEvent, ChannelCheerEvent
 from twitchAPI.type import CustomRewardRedemptionStatus, TwitchAPIException
 from twitchAPI.helper import first
 
 from jddesk import common
 from jddesk.config import DeskConfig
 
-# time in seconds to wait between each poll of the twitch api
+# time in seconds to wait between each run loop
 POLL_INTERVAL = 1
 
 LOG = logging.getLogger("jddesk")
@@ -65,26 +63,34 @@ class DeskController:
         self.broadcaster_id = None
         self.desk_up_reward_id = None
         self.desk_down_reward_id = None
-        self.pubsub = None
+        self.eventsub = None
         self.reconnect_bluetooth_required = False
         self.reconnect_display_server_required = False
 
-        # ensure graceful shutdown is handled on SIGINT and SIGTERM signals (only works for linux)
+    def configure_signal_handlers(self) -> None:
+        """Ensure graceful shutdown is handled on SIGINT and SIGTERM signals (only works for
+        linux)."""
+        LOG.debug("configuring signal handlers")
+        loop = asyncio.get_event_loop()
         try:
-            signal.signal(signal.SIGINT, self.exit_gracefully)
-            signal.signal(signal.SIGTERM, self.exit_gracefully)
+            loop.add_signal_handler(
+                signal.SIGINT, lambda: asyncio.create_task(self.exit_gracefully())
+            )
+            loop.add_signal_handler(
+                signal.SIGTERM, lambda: asyncio.create_task(self.exit_gracefully())
+            )
         except NotImplementedError as exp:
             LOG.warning("Could not set up signal handlers: %s", exp)
 
-    def exit_gracefully(self, signum: int, frame: Optional[FrameType]) -> None:
+    async def exit_gracefully(self) -> None:
         """Gracefully shut down the controller."""
-        del frame
         self.running = False
-        LOG.info("received signal %s", signum)
-        if self.pubsub:
-            LOG.info("stopping pubsub...")
-            self.pubsub.stop()
-            self.pubsub = None
+        if self.eventsub:
+            LOG.info("stopping eventsub...")
+            await self.eventsub.stop()
+        if self.twitch:
+            LOG.info("disconnecting from twitch api...")
+            await self.twitch.close()
         if self.config.display_server_enabled:
             LOG.info("disconnecting from display server...")
             self.sio_client.disconnect()
@@ -129,16 +135,14 @@ class DeskController:
         if self.config.display_server_enabled:
             self.display_height()
 
-    async def callback_bits(self, uuid: UUID, data: dict[str, Any]) -> None:
+    async def callback_bits(self, data: ChannelCheerEvent) -> None:
         """Callback for bit redemptions that moves desk according to the message.
 
-        :param uuid: uuid of the pubsub message
         :param data: data of the pubsub message
         """
-        del uuid
-        bits_used = data["data"]["bits_used"]
-        chat_message = data["data"]["chat_message"]
-        user = data["data"]["user_name"]
+        bits_used = data.event.bits
+        chat_message = data.event.message
+        user = data.event.user_name
         if not user:
             user = "anonymous"
 
@@ -166,16 +170,16 @@ class DeskController:
         else:
             LOG.info("No desk command found in bits message")
 
-    async def callback_channel_points(self, uuid: UUID, data: dict[str, Any]) -> None:
+    async def callback_channel_points(
+        self, data: ChannelPointsCustomRewardRedemptionAddEvent
+    ) -> None:
         """Callback for channel point redemptions that moves desk according to the reward redeemed.
 
-        :param uuid: uuid of the pubsub message
         :param data: data of the pubsub message
         """
-        del uuid
-        reward_id = data["data"]["redemption"]["reward"]["id"]
-        redemption_id = data["data"]["redemption"]["id"]
-        user = data["data"]["redemption"]["user"]["display_name"]
+        reward_id = data.event.reward.id
+        redemption_id = data.event.id
+        user = data.event.user_name
 
         if reward_id == self.desk_up_reward_id:
             await self.handle_desk_up_reward(redemption_id, user)
@@ -338,9 +342,9 @@ class DeskController:
         assert broadcaster is not None
         self.broadcaster_id = broadcaster.id
 
-        self.pubsub = PubSub(self.twitch, callback_loop=asyncio.get_running_loop())
-        assert self.pubsub is not None
-        self.pubsub.start()
+        self.eventsub = EventSubWebsocket(self.twitch, callback_loop=asyncio.get_running_loop())
+        assert self.eventsub is not None
+        self.eventsub.start()
 
         if self.config.channel_points_enabled:
             LOG.info("checking channel points rewards...")
@@ -354,16 +358,18 @@ class DeskController:
                 self.config.desk_down_reward_name,
             )
             LOG.info("listening for channel points...")
-            await self.pubsub.listen_channel_points(
+            await self.eventsub.listen_channel_points_custom_reward_redemption_add(
                 self.broadcaster_id, self.callback_channel_points
             )
 
         if self.config.bits_enabled:
             LOG.info("listening for bits...")
-            await self.pubsub.listen_bits(self.broadcaster_id, self.callback_bits)
+            await self.eventsub.listen_channel_cheer(self.broadcaster_id, self.callback_bits)
 
     async def run(self) -> None:
         """Run the desk controller."""
+
+        self.configure_signal_handlers()
 
         self.running = True
         if self.config.display_server_enabled:
