@@ -16,25 +16,25 @@ cli = sys.modules["flask.cli"]
 cli.show_server_banner = lambda *x: None  # type: ignore
 
 
-@app.route("/")  # type: ignore
-def index():
+@app.route("/")
+def index():  # type: ignore
     """Main page that displays the current height of the desk."""
     return render_template("index.html")
 
 
-@socketio.on("connect")  # type: ignore
-def connect():
+@socketio.on("connect")
+def connect():  # type: ignore
     """Function to call when a client connects."""
     LOG.info("client connected to display server")
 
 
-@socketio.on("disconnect")  # type: ignore
-def disconnect():
+@socketio.on("disconnect")
+def disconnect():  # type: ignore
     """Function to call when a client disconnects."""
     LOG.info("client disconnected from display server")
 
 
-@socketio.on("height_update")  # type: ignore
-def update_height(height):
+@socketio.on("height_update")
+def update_height(height):  # type: ignore
     """Sends the updated desk height to the client."""
     socketio.emit("height_display", {"height": str(height)})

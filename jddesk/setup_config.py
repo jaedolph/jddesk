@@ -104,21 +104,21 @@ def input_bool(prompt: str) -> bool:
     :param prompt: input prompt to show the user
     :return: true if the user enters yes, false if they enter no
     """
-    return_val = None
-    while return_val is None:
+    return_val = False
+    while True:
         input_string = input(prompt)
         if input_string.lower().startswith("y"):
             return_val = True
-        elif input_string.lower().startswith("n"):
+            break
+        if input_string.lower().startswith("n"):
             return_val = False
-        else:
-            print("Please enter 'yes' or 'no'")
-            return_val = None
+            break
+        print("Please enter 'yes' or 'no'")
 
     return return_val
 
 
-def input_float(prompt: str) -> bool:
+def input_float(prompt: str) -> float:
     """Wrapper around the input function that can be used a float value. Repeats the prompt until a
     float value is given.
 
@@ -215,8 +215,8 @@ def configure_twitch(config: DeskConfig) -> DeskConfig:
     config.broadcaster_name = input("\nWhat is the name of your twitch channel? e.g. 'jaedolph': ")
     print("\n" * 5)
 
-    channel_points_enabled = None
-    bits_enabled = None
+    channel_points_enabled = False
+    bits_enabled = False
 
     while not (channel_points_enabled or bits_enabled):
         channel_points_enabled = input_bool(
@@ -229,8 +229,6 @@ def configure_twitch(config: DeskConfig) -> DeskConfig:
 
         if not (channel_points_enabled or bits_enabled):
             print("\nERROR: You must enable at least one option (channel points or bits)")
-            channel_points_enabled = None
-            bits_enabled = None
 
     config.channel_points_enabled = channel_points_enabled
     config.bits_enabled = bits_enabled
