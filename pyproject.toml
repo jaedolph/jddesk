@@ -2,7 +2,7 @@
 [project]
 name = "jddesk"
 description = "Code powering Jaedolph's desk related channel points rewards"
-version = "1.3.2"
+version = "1.4.0"
 authors = [
     { name = "Jaedolph - Lord of Games" }
 ]
